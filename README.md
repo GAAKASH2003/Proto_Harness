@@ -67,30 +67,30 @@ sequenceDiagram
     autonumber
     actor User
     participant Runner as Harness Runner
-    participant Loop as AgentTurnHandler
-    participant Agent as Pydantic AI (agent.iter)
+    participant Handler as AgentTurnHandler
+    participant Agent as Pydantic AI
     participant Tools as Tool Registry
     participant TUI as Rich Terminal UI
 
     User->>Runner: submit("Fix bug in main.py")
-    Runner->>Loop: run_turn(prompt)
-    Loop->>TUI: emit(TurnStarted)
-    Loop->>Agent: agent.iter(prompt, message_history)
+    Runner->>Handler: run_turn(prompt)
+    Handler->>TUI: emit(TurnStarted)
+    Handler->>Agent: agent.iter(prompt, history)
 
     loop Stream Nodes
         alt ModelRequestNode
             Agent->>TUI: emit(AssistantTextDelta)
         else CallToolsNode
-            Loop->>TUI: emit(ToolCallStarted)
-            Loop->>Tools: execute tool (read, write, edit, bash)
-            Tools-->>Loop: tool result
-            Loop->>TUI: emit(ToolResult)
+            Handler->>TUI: emit(ToolCallStarted)
+            Handler->>Tools: execute tool
+            Tools-->>Handler: tool result
+            Handler->>TUI: emit(ToolResult)
         end
     end
 
-    Loop->>TUI: emit(TurnFinished)
-    Loop-->>Runner: Turn completed
-    Runner->>Runner: Drain follow-up queue if pending
+    Handler->>TUI: emit(TurnFinished)
+    Handler-->>Runner: Turn completed
+    Runner->>Runner: Drain follow-up queue
 ```
 
 ### 1. Node Iteration
