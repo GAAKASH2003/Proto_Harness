@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+@dataclass(frozen=True,slots=True)
+class TurnStarted:
+    turn_id:int
+    prompt:str
+    kind:Literal["turn_started"]="turn_started"
+
+@dataclass(frozen=True,slots=True)
+class TurnFinished:
+    turn_id:int
+    aborted: bool = False
+    kind:Literal["turn_finished"]="turn_finished"
+
+@dataclass(frozen=True,slots=True)
+class AssistantTextDelta:
+    text: str
+    kind: Literal["assistant_text_delta"]="assistant_text_delta"
+
+@dataclass(frozen=True, slots=True)
+class ToolCallStarted:
+    tool_call_id: str
+    name: str
+    args: str
+    child_index: int | None = None
+    kind: Literal["tool_call_started"] = "tool_call_started"
+
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    tool_call_id:str
+    name:str
+    output:str    
+    ok: bool=True
+    kind:Literal["tool_result"]="tool_result"
+
+@dataclass(frozen=True, slots=True)
+class AgentError:
+    message:str
+    kind:Literal["agent_error"]="agent_error"
+    
+Event=(
+    TurnStarted
+    |TurnFinished
+    |AssistantTextDelta
+    |ToolCallStarted
+    |ToolResult
+    |AgentError
+)

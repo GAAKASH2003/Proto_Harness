@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "proto-harness"
+version = "0.1.0"
+description = "A simplified, step-by-step rebuild of the agentic harness"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic",
+    "pydantic-settings",
+    "python-dotenv",
+    "click",
+    "rich",
+    "prompt-toolkit",
+    "pydantic-ai-slim[google,openai]",
+    "httpx",
+]
+
+[project.scripts]
+proto = "proto_harness.cli:cli"

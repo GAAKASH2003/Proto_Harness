@@ -1,0 +1,25 @@
+from __future__ import annotations
+
+import logging
+
+from pydantic_ai import Agent
+
+from proto_harness.agent.deps import AgentDeps
+from proto_harness.tools.bash import bash
+from proto_harness.tools.files import edit, read, write
+
+logger = logging.getLogger(__name__)
+
+
+def register_tools(agent: Agent[AgentDeps]) -> None:
+    """Register all tools onto the agent.
+
+    Called once by build_agent() in factory.py.
+    To add a new tool: import it here and call agent.tool().
+    """
+    agent.tool(read)
+    agent.tool(write)
+    agent.tool(edit)
+    agent.tool(bash)
+
+    logger.debug("Registered tools: read, write, edit, bash")

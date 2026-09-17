@@ -1,0 +1,30 @@
+# Environments & secrets
+penv/
+env/
+.env
+.env.*
+!.env.example
+
+# Proto Harness local files & logs
+.proto_harness/
+*.log
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+
+# Build & distribution artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing & linting caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+
+# Documentation / local scratch files
+implementation_plan.md
