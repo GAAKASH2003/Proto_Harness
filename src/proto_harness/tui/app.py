@@ -12,6 +12,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.style import Style
@@ -27,6 +29,8 @@ from proto_harness.harness.decisions import DecisionChannel
 from proto_harness.harness.runner import Runner
 from proto_harness.permissions.gate import PermissionGate
 from proto_harness.permissions.types import PermissionMode
+from proto_harness.skills.loader import load_skills
+from proto_harness.skills.payload import format_skill_payload
 from proto_harness.tui import render
 
 logger = logging.getLogger(__name__)
@@ -39,6 +43,46 @@ _ASSISTANT_PREFIX = "Agent:: "
 def startup_banner(provider: str, model: str, cwd: Path, mode:str) -> str:
     """The startup banner: provider:model and active workspace."""
     return f"Agent - {provider}:{model} - cwd:{cwd} - mode:{mode} - type a line; /quit exits."
+
+
+def parse_skill_command(line: str) -> tuple[str, str] | None:
+    """Split a `/<skill-name> [trailing]` line into (name, trailing), or None."""
+    stripped = line.strip()
+    if not stripped.startswith("/"):
+        return None
+    name, _, trailing = stripped[1:].partition(" ")
+    name = name.strip().lower()
+    if not name:
+        return None
+    return name, trailing.strip()
+
+
+class SlashCompleter(Completer):
+    """Autocomplete slash commands and skills as the user types `/`."""
+
+    def __init__(self, cwd: Path) -> None:
+        self._cwd = cwd
+        self._base_commands = {
+            "/mode": "switch or view permission mode (/mode <name>)",
+            "/cd": "change working directory (/cd <path>)",
+            "/pwd": "print current working directory",
+            "/clear": "clear the terminal screen",
+            "/quit": "exit the assistant",
+        }
+
+    def get_completions(self, document: Document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+
+        skills = load_skills(self._cwd)
+        all_options = dict(self._base_commands)
+        for name, s in skills.items():
+            all_options[f"/{name}"] = s.description
+
+        for cmd, desc in all_options.items():
+            if cmd.startswith(text):
+                yield Completion(cmd, start_position=-len(text), display_meta=desc)
 
 
 def _make_event_sink(console: Console) -> Callable[[events.Event], None]:
@@ -151,7 +195,7 @@ async def run_app(
     runner = Runner(on_event=emit)
     runner.set_handler(handler)
 
-    session: PromptSession[str] = PromptSession()
+    session: PromptSession[str] = PromptSession(completer=SlashCompleter(active_cwd))
 
     console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value))
 
@@ -224,5 +268,21 @@ async def run_app(
                 else:
                     console.print(f"Proto - directory not found: {raw_path}")
                 continue
+
+            # Check for skill execution (e.g. /commit or /code-review)
+            skill_cmd = parse_skill_command(text)
+            if skill_cmd is not None:
+                skill_name, trailing = skill_cmd
+                catalog = load_skills(deps.cwd)
+                found = catalog.get(skill_name)
+                if found is not None:
+                    payload = format_skill_payload(found, cwd=deps.cwd)
+                    turn_input = f"{payload}\n\n{trailing}" if trailing else payload
+                    await runner.submit(turn_input)
+                    continue
+                else:
+                    available = ", ".join(sorted(catalog))
+                    console.print(f"Proto - unknown command '/{skill_name}'; available skills: {available}")
+                    continue
 
             await runner.submit(text)

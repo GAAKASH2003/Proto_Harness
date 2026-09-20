@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -12,6 +12,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 from proto_harness.agent.deps import AgentDeps
 from proto_harness.config.settings import settings
 from proto_harness.tools.registry import register_tools
+from proto_harness.skills.catalog import assemble_skills_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,14 @@ def build_agent() -> Agent[AgentDeps]:
 
     agent: Agent[AgentDeps] = Agent(
         model,
-        system_prompt=_SYSTEM_PROMPT,
         deps_type=AgentDeps,
     )
+
+    @agent.system_prompt
+    def assemble_instructions(ctx: RunContext[AgentDeps]) -> str:
+        catalog = assemble_skills_catalog(ctx.deps.cwd)
+        parts = (_SYSTEM_PROMPT, catalog)
+        return "\n\n".join(part for part in parts if part)
 
     register_tools(agent)
 

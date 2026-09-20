@@ -17,6 +17,7 @@ dependencies = [
     "prompt-toolkit",
     "pydantic-ai-slim[google,openai]",
     "httpx",
+    "pyyaml",
 ]
 
 [project.scripts]

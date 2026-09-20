@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # Tool execution
     bash_timeout_s: float = 120.0
-
+    skills_dir: Path = Path(".proto_harness/skills")
     @property
     def active_model(self) -> str:
         if self.llm_provider == "openrouter":

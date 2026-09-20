@@ -7,6 +7,7 @@ from pydantic_ai import Agent
 from proto_harness.agent.deps import AgentDeps
 from proto_harness.tools.bash import bash
 from proto_harness.tools.files import cd, edit, pwd, read, write
+from proto_harness.tools.skills import skill
 
 logger = logging.getLogger(__name__)
 
@@ -23,5 +24,5 @@ def register_tools(agent: Agent[AgentDeps]) -> None:
     agent.tool(cd)
     agent.tool(pwd)
     agent.tool(bash)
-
+    agent.tool(skill)
     logger.debug("Registered tools: read, write, edit, cd, pwd, bash")
