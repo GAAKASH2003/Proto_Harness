@@ -21,6 +21,7 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 - Real-time token streaming and structured event propagation
 - Concurrency and message queuing (steering & follow-up queues)
 - **Human-in-the-loop (HITL) safety & permission gating** (`DEFAULT`, `PLAN`, `EDIT`, `BYPASS`)
+- **Agent Skills Standard & Progressive Disclosure** (packaged built-ins + repo-local skills)
 - Tool execution sandbox with precise file operations, workspace navigation, and shell safety
 - Rich terminal user interface with unblocked interactive prompts and native Windows VT processing
 
@@ -32,18 +33,27 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 Proto_Harness/
 ├── src/proto_harness/
 │   ├── cli.py                  # CLI entry point (`proto` command with -C, -p, -m, -M flags)
+│   ├── frontmatter.py          # Shared YAML frontmatter parser for markdown documents
 │   ├── logging.py              # File-based logging to .proto_harness/logs/
 │   ├── config/
-│   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter)
+│   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter, skills_dir)
 │   ├── entities/
 │   │   ├── events.py           # Domain Event dataclasses (TurnStarted, ToolResult, etc.)
-│   │   └── permissions.py      # PermissionRequest, PermissionDecision, PermissionOutcome
+│   │   ├── permissions.py      # PermissionRequest, PermissionDecision, PermissionOutcome
+│   │   └── skill_def.py        # Immutable SkillDef entity
 │   ├── permissions/
 │   │   ├── types.py            # PermissionMode and ToolKind enums
 │   │   └── gate.py             # PermissionGate policy engine (mode × kind evaluation)
+│   ├── skills/
+│   │   ├── loader.py           # Discovers built-in and project-local skills
+│   │   ├── catalog.py          # Assembles the prompt catalog menu block
+│   │   ├── payload.py          # Formats instructions, bundled assets, and outputs trailer
+│   │   └── builtin/            # Packaged default skills
+│   │       ├── commit/SKILL.md
+│   │       └── code-review/SKILL.md
 │   ├── agent/
 │   │   ├── deps.py             # Agent dependencies (cwd, emit, gate, resolve_permission)
-│   │   ├── factory.py          # Model selection and agent factory
+│   │   ├── factory.py          # Model selection, agent factory, and dynamic catalog hook
 │   │   └── loop.py             # Headless turn handler (Pydantic AI stream)
 │   ├── harness/
 │   │   ├── decisions.py        # DecisionChannel for async mid-turn HITL approval
@@ -53,11 +63,32 @@ Proto_Harness/
 │   │   ├── approval.py         # check_permission guard function
 │   │   ├── bash.py             # Safe async subprocess runner (guarded)
 │   │   ├── files.py            # read, write, edit, cd, pwd tools
+│   │   ├── skills.py           # On-demand skill loader tool
 │   │   └── registry.py         # Tool registration onto the Agent
 │   └── tui/
 │       ├── render.py           # Event-to-Rich renderers with append-style styling
-│       └── app.py              # Async interactive REPL with patch_stdout(raw=True)
+│       └── app.py              # Async interactive REPL with patch_stdout and SlashCompleter
 ```
+
+---
+
+## 🧠 Skills System & Progressive Disclosure (`skills/`)
+
+Rather than bloating system prompts with extensive instructions for every possible task, Proto Harness follows the **Agent Skills Standard** via **Progressive Disclosure**:
+
+1. **Lightweight Menu (Turn-Level)**: Every turn, the system prompt only receives a clean, 1-line description for each available skill:
+   ```markdown
+   Skills you can load on demand — call skill("<name>") to read a skill's full instructions before following it:
+   - code-review — Review recent changes or specific files for correctness, security, and cleanliness
+   - commit — Inspect git status and diffs to create clean conventional commits
+   ```
+2. **On-Demand Loading**: When needed, the agent invokes `skill(name="...")` to load the full markdown instructions.
+3. **Workspace Deliverables Standard**: Every loaded skill instructs the agent to store new standalone work-products under `.proto/outputs/` (unless another location is explicitly requested), keeping the workspace clean.
+
+### Built-in Skills vs. Project Skills
+
+- **Built-in Skills**: Bundled directly with Proto (`commit`, `code-review`).
+- **Project Skills**: Create custom skills inside `<workspace>/.proto_harness/skills/<skill-name>/SKILL.md`. Project skills with matching names automatically override built-in skills!
 
 ---
 
@@ -67,7 +98,7 @@ Proto Harness includes a full permission layer ensuring the agent cannot mutate 
 
 ### 1. Permission Modes (`PermissionMode`)
 
-| Mode | Mutating File Edits (`write`, `edit`) | Shell Commands (`bash`) | Read-Only Tools (`read`, `pwd`, `grep`) | Typical Use Case |
+| Mode | Mutating File Edits (`write`, `edit`) | Shell Commands (`bash`) | Read-Only & Skills (`read`, `pwd`, `skill`) | Typical Use Case |
 |---|---|---|---|---|
 | **`DEFAULT`** | 🟡 Ask user (`[y/N/a]`) | 🟡 Ask user (`[y/N/a]`) | 🟢 Auto-allow | Standard safe interactive pairing |
 | **`PLAN`** | 🔴 Denied (read-only) | 🔴 Denied (read-only) | 🟢 Auto-allow | Exploration, planning, code review |
@@ -102,7 +133,7 @@ sequenceDiagram
     participant Tools as Tool Registry
     participant TUI as Rich Terminal UI
 
-    User->>Runner: submit("Install dependencies and fix bug")
+    User->>Runner: submit("/commit")
     Runner->>Handler: run_turn(prompt)
     Handler->>TUI: emit(TurnStarted)
     Handler->>Agent: agent.iter(prompt, history)
@@ -145,20 +176,23 @@ The agent has access to a structured toolset designed specifically for coding ta
 | `pwd()` | `READ_ONLY` | Query active directory | Returns current working directory of agent |
 | `find_files(pattern)` | `READ_ONLY` | Locate workspace files | Glob pattern matching |
 | `grep(pattern, path)` | `READ_ONLY` | Search code patterns | Regex or substring search within workspace |
+| `skill(name)` | `READ_ONLY` | Load skill instructions | Progressive disclosure; returns `ModelRetry` on unknown skills |
 
 ---
 
-## 🖥️ Terminal UI(`tui/`)
+## 🖥️ Terminal UI (`tui/`)
 
 - **Pinned Input with `patch_stdout(raw=True)`**: Keeps the `> ` prompt pinned at the bottom while Rich logs, panels, and streaming markdown scroll smoothly above it.
 - **Clean Dialogue Styling**: Distinct background styling for user echo and assistant streaming with green/red bordered panels for tool executions.
+- **Interactive Autocompletion (`SlashCompleter`)**: Press `/` in the prompt to trigger an instant autocomplete menu with descriptions for all commands and skills.
 
 ### Interactive REPL Commands
 
-During an active session, you can run instant control commands:
+During an active session, you can run instant control and skill commands:
 
 | Command | Action |
 |---|---|
+| `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
 | `/cd <path>` or `cd <path>` | Change active working directory directly in the REPL |
 | `/pwd` or `pwd` | Display the current working directory |
@@ -213,6 +247,6 @@ proto -p openrouter -m "anthropic/claude-3.5-sonnet"
 
 ## 💡 Key Design Takeaways
 
-1. **Decoupled Architecture**: The agent core (`loop.py`), harness (`runner.py`), permission gate (`gate.py`), and UI (`app.py`, `render.py`) communicate strictly via domain contracts.
-2. **Single Input Surface for Turn & HITL**: Approval questions consume the live input surface without opening secondary prompt sessions or causing deadlocks.
-3. **Graceful Degradation & Portability**: Native terminal handling works seamlessly on Windows PowerShell, Command Prompt, and Unix terminals.
+1. **Decoupled Architecture**: The agent core (`loop.py`), harness (`runner.py`), permission gate (`gate.py`), and skills catalog (`catalog.py`) communicate strictly via domain contracts.
+2. **Progressive Disclosure**: Keeps token usage minimal while providing domain-specific workflows on demand.
+3. **Single Input Surface for Turn, HITL, & Skills**: Approval questions and slash commands ride the live input surface without opening secondary prompt sessions or causing deadlocks.
