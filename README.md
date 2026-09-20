@@ -148,12 +148,10 @@ The agent has access to a structured toolset designed specifically for coding ta
 
 ---
 
-## 🖥️ Terminal UI & Windows VT Support (`tui/`)
+## 🖥️ Terminal UI(`tui/`)
 
 - **Pinned Input with `patch_stdout(raw=True)`**: Keeps the `> ` prompt pinned at the bottom while Rich logs, panels, and streaming markdown scroll smoothly above it.
-- **Native Windows VT100 / ANSI Processing**: Automatically enables `ENABLE_VIRTUAL_TERMINAL_PROCESSING` (`0x0004`) on `STD_OUTPUT_HANDLE`, `STD_ERROR_HANDLE`, and `CONOUT$` via `ctypes` on Windows. Eliminates raw `?[...m` escape code artifacts in PowerShell and conhost.
 - **Clean Dialogue Styling**: Distinct background styling for user echo and assistant streaming with green/red bordered panels for tool executions.
-- **Pydantic AI Banner Suppression**: Automatically sets `PYDANTIC_AI_NO_BANNER=1` to ensure a clean, uncluttered startup.
 
 ### Interactive REPL Commands
 
