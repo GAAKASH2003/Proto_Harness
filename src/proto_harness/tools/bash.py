@@ -8,6 +8,8 @@ from pydantic_ai import RunContext
 
 from proto_harness.agent.deps import AgentDeps
 from proto_harness.config.settings import settings
+from proto_harness.permissions.types import ToolKind
+from proto_harness.tools.approval import check_permission
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,7 @@ async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
     Args:
         command: The shell command to run.
     """
+    await check_permission(ctx, "bash", f"command={command!r}", ToolKind.OTHER)
     logger.debug("bash: %r (cwd=%s)", command, ctx.deps.cwd)
 
     try:

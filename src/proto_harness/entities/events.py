@@ -40,12 +40,21 @@ class ToolResult:
 class AgentError:
     message:str
     kind:Literal["agent_error"]="agent_error"
-    
-Event=(
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionRequested:
+    tool_name: str
+    args: str
+    kind: Literal["permission_requested"] = "permission_requested"
+
+
+Event = (
     TurnStarted
-    |TurnFinished
-    |AssistantTextDelta
-    |ToolCallStarted
-    |ToolResult
-    |AgentError
+    | TurnFinished
+    | AssistantTextDelta
+    | ToolCallStarted
+    | ToolResult
+    | AgentError
+    | PermissionRequested
 )
