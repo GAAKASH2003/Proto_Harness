@@ -250,3 +250,5 @@ proto -p openrouter -m "anthropic/claude-3.5-sonnet"
 1. **Decoupled Architecture**: The agent core (`loop.py`), harness (`runner.py`), permission gate (`gate.py`), and skills catalog (`catalog.py`) communicate strictly via domain contracts.
 2. **Progressive Disclosure**: Keeps token usage minimal while providing domain-specific workflows on demand.
 3. **Single Input Surface for Turn, HITL, & Skills**: Approval questions and slash commands ride the live input surface without opening secondary prompt sessions or causing deadlocks.
+
+

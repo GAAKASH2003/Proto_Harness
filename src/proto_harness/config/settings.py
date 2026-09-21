@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # openrouter_model: str = "openrouter/free"
     # openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     openrouter_model: str = "nvidia/nemotron-3.5-lightning:free"
+    
+    memory_filename: str = "MEMORY.md"
+    memory_max_lines: int = 200
+    memory_max_bytes: int = 20_000
 
     log_level: str = "INFO"
 

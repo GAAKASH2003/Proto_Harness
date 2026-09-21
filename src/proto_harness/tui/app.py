@@ -29,6 +29,8 @@ from proto_harness.harness.decisions import DecisionChannel
 from proto_harness.harness.runner import Runner
 from proto_harness.permissions.gate import PermissionGate
 from proto_harness.permissions.types import PermissionMode
+from proto_harness.memory.extract import extract_on_exit
+from proto_harness.memory.files import harness_memory_path
 from proto_harness.skills.loader import load_skills
 from proto_harness.skills.payload import format_skill_payload
 from proto_harness.tui import render
@@ -64,6 +66,7 @@ class SlashCompleter(Completer):
         self._cwd = cwd
         self._base_commands = {
             "/mode": "switch or view permission mode (/mode <name>)",
+            "/memory": "inspect current workspace memory (/memory)",
             "/cd": "change working directory (/cd <path>)",
             "/pwd": "print current working directory",
             "/clear": "clear the terminal screen",
@@ -231,6 +234,15 @@ async def run_app(
                 console.print(f"Proto - cwd: {deps.cwd}")
                 continue
 
+            if lower in {"/memory", "memory"}:
+                mem_path = harness_memory_path(deps.cwd)
+                if mem_path.is_file():
+                    content = mem_path.read_text(encoding="utf-8")
+                    console.print(f"[bold cyan]Workspace Memory ({mem_path}):[/bold cyan]\n{content.strip()}")
+                else:
+                    console.print(f"Proto - no memory recorded yet ({mem_path} not found).")
+                continue
+
             if lower.startswith("/mode ") or lower == "/mode":
                 parts = text.split(" ", 1)
                 mode_name = parts[1].strip().lower() if len(parts) > 1 else ""
@@ -286,3 +298,10 @@ async def run_app(
                     continue
 
             await runner.submit(text)
+
+    # Wait for the active turn to finish before exit
+    while runner.is_busy:
+        await asyncio.sleep(0.05)
+
+    # On-exit memory write-back (non-fatal)
+    await extract_on_exit(handler.message_history, active_cwd)

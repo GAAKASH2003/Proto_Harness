@@ -11,8 +11,9 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from proto_harness.agent.deps import AgentDeps
 from proto_harness.config.settings import settings
-from proto_harness.tools.registry import register_tools
+from proto_harness.memory.service import assemble_memory
 from proto_harness.skills.catalog import assemble_skills_catalog
+from proto_harness.tools.registry import register_tools
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,9 @@ def build_agent() -> Agent[AgentDeps]:
 
     @agent.system_prompt
     def assemble_instructions(ctx: RunContext[AgentDeps]) -> str:
+        memory = assemble_memory(ctx.deps.cwd)
         catalog = assemble_skills_catalog(ctx.deps.cwd)
-        parts = (_SYSTEM_PROMPT, catalog)
+        parts = (_SYSTEM_PROMPT, memory, catalog)
         return "\n\n".join(part for part in parts if part)
 
     register_tools(agent)
