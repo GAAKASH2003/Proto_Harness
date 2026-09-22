@@ -22,6 +22,7 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 - Concurrency and message queuing (steering & follow-up queues)
 - **Human-in-the-loop (HITL) safety & permission gating** (`DEFAULT`, `PLAN`, `EDIT`, `BYPASS`)
 - **Agent Skills Standard & Progressive Disclosure** (packaged built-ins + repo-local skills)
+- **Persistent Workspace Memory** (`AGENTS.md` ancestor hierarchy + auto-updating `.proto_harness/MEMORY.md`)
 - Tool execution sandbox with precise file operations, workspace navigation, and shell safety
 - Rich terminal user interface with unblocked interactive prompts and native Windows VT processing
 
@@ -36,7 +37,7 @@ Proto_Harness/
 │   ├── frontmatter.py          # Shared YAML frontmatter parser for markdown documents
 │   ├── logging.py              # File-based logging to .proto_harness/logs/
 │   ├── config/
-│   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter, skills_dir)
+│   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter, skills_dir, memory)
 │   ├── entities/
 │   │   ├── events.py           # Domain Event dataclasses (TurnStarted, ToolResult, etc.)
 │   │   ├── permissions.py      # PermissionRequest, PermissionDecision, PermissionOutcome
@@ -44,6 +45,10 @@ Proto_Harness/
 │   ├── permissions/
 │   │   ├── types.py            # PermissionMode and ToolKind enums
 │   │   └── gate.py             # PermissionGate policy engine (mode × kind evaluation)
+│   ├── memory/
+│   │   ├── files.py            # Discovers root-to-cwd AGENTS.md and .proto_harness/MEMORY.md
+│   │   ├── service.py          # Assembles memory context with headers and line budget capping
+│   │   └── extract.py          # Automatic session summarization appended to MEMORY.md on exit
 │   ├── skills/
 │   │   ├── loader.py           # Discovers built-in and project-local skills
 │   │   ├── catalog.py          # Assembles the prompt catalog menu block
@@ -53,7 +58,7 @@ Proto_Harness/
 │   │       └── code-review/SKILL.md
 │   ├── agent/
 │   │   ├── deps.py             # Agent dependencies (cwd, emit, gate, resolve_permission)
-│   │   ├── factory.py          # Model selection, agent factory, and dynamic catalog hook
+│   │   ├── factory.py          # Model selection, agent factory, and dynamic memory/catalog hook
 │   │   └── loop.py             # Headless turn handler (Pydantic AI stream)
 │   ├── harness/
 │   │   ├── decisions.py        # DecisionChannel for async mid-turn HITL approval
@@ -89,6 +94,56 @@ Rather than bloating system prompts with extensive instructions for every possib
 
 - **Built-in Skills**: Bundled directly with Proto (`commit`, `code-review`).
 - **Project Skills**: Create custom skills inside `<workspace>/.proto_harness/skills/<skill-name>/SKILL.md`. Project skills with matching names automatically override built-in skills!
+
+---
+
+## 💾 Persistent Workspace Memory (`memory/`)
+
+Proto Harness equips the agent with persistent, multi-layered memory so it maintains project guidelines, repository architecture, and cross-session history without manual prompt engineering.
+
+### 1. Dual-Layer Memory Hierarchy
+
+Memory is loaded dynamically on every turn from two complementary sources:
+- **`AGENTS.md` (Human-Curated Rules)**: Workspace instructions, architecture maps, and coding conventions written by developers.
+- **`MEMORY.md` (Agent Session Knowledge)**: Machine-updated diary of past sessions, key architectural decisions, and learnings stored under `<workspace>/.proto_harness/MEMORY.md`.
+
+### 2. Hierarchical Ancestor Discovery (`memory/files.py`)
+
+Proto Harness traverses from the filesystem root down to the active working directory:
+$$\text{Root} \longrightarrow \dots \longrightarrow \text{Parent} \longrightarrow \text{Current Working Directory}$$
+
+1. Any `AGENTS.md` found along the ancestry is loaded in order (root first, current directory last). This enables monorepos or nested subprojects to inherit organization-wide guidelines while overriding or specializing rules for specific submodules.
+2. The current workspace's `.proto_harness/MEMORY.md` is appended at the very end.
+
+Every discovered block is formatted with explicit provenance headers so the model knows where each constraint originates:
+```markdown
+# From C:\Projects\AGENTS.md
+[global organization standards...]
+
+# From C:\Projects\MyRepo\AGENTS.md
+[project-specific test instructions...]
+
+# From C:\Projects\MyRepo\.proto_harness\MEMORY.md
+- 2026-09-21: Configured database migration scripts and resolved circular imports.
+```
+
+### 3. Strict Budget Capping & Safety (`memory/service.py`)
+
+To prevent memory files from exhausting LLM context windows as projects grow:
+- Configured via `settings.memory_max_lines` (default: `200`) and `settings.memory_max_bytes` (default: `20,000`).
+- `MEMORY.md` is automatically capped using `clip_lines_to_budget`, preserving whole lines from the head and cleanly noting truncation if the budget is exceeded.
+
+### 4. Automatic Session Summarization on Exit (`memory/extract.py`)
+
+When you end a session (`/quit` or `exit`), Proto Harness triggers a non-fatal exit extractor:
+1. Gathers the session conversation turns.
+2. Prompts the LLM for a concise 1-2 sentence summary of what was accomplished and any notable context for future runs.
+3. Automatically appends a timestamped bullet point (`- YYYY-MM-DD: <summary>`) to `.proto_harness/MEMORY.md` in the current workspace directory.
+4. **Resilient**: If network fails, the user cancels, or the LLM is unreachable, the exit summary fails silently and the REPL exits immediately without crashing.
+
+### 5. Inspecting Memory Interactively (`/memory`)
+
+At any point in the REPL, run `/memory` to view all discovered memory files along with the exact rendered text currently injected into the agent's context.
 
 ---
 
@@ -188,16 +243,15 @@ The agent has access to a structured toolset designed specifically for coding ta
 
 ### Interactive REPL Commands
 
-During an active session, you can run instant control and skill commands:
-
 | Command | Action |
 |---|---|
 | `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
+| `/memory` | Inspect the active assembled memory (`AGENTS.md` + `MEMORY.md`) injected into system prompt |
 | `/cd <path>` or `cd <path>` | Change active working directory directly in the REPL |
 | `/pwd` or `pwd` | Display the current working directory |
 | `/clear` or `clear` / `cls` | Clear the terminal and re-display the active configuration banner |
-| `/quit` or `exit` | Exit the assistant |
+| `/quit` or `exit` | Exit the assistant (triggers automatic session summarization to `MEMORY.md`) |
 
 ---
 

@@ -31,6 +31,7 @@ from proto_harness.permissions.gate import PermissionGate
 from proto_harness.permissions.types import PermissionMode
 from proto_harness.memory.extract import extract_on_exit
 from proto_harness.memory.files import harness_memory_path
+from proto_harness.memory.service import assemble_memory
 from proto_harness.skills.loader import load_skills
 from proto_harness.skills.payload import format_skill_payload
 from proto_harness.tui import render
@@ -62,8 +63,8 @@ def parse_skill_command(line: str) -> tuple[str, str] | None:
 class SlashCompleter(Completer):
     """Autocomplete slash commands and skills as the user types `/`."""
 
-    def __init__(self, cwd: Path) -> None:
-        self._cwd = cwd
+    def __init__(self, get_cwd: Callable[[], Path]) -> None:
+        self._get_cwd = get_cwd
         self._base_commands = {
             "/mode": "switch or view permission mode (/mode <name>)",
             "/memory": "inspect current workspace memory (/memory)",
@@ -78,7 +79,7 @@ class SlashCompleter(Completer):
         if not text.startswith("/") or " " in text:
             return
 
-        skills = load_skills(self._cwd)
+        skills = load_skills(self._get_cwd())
         all_options = dict(self._base_commands)
         for name, s in skills.items():
             all_options[f"/{name}"] = s.description
@@ -198,7 +199,7 @@ async def run_app(
     runner = Runner(on_event=emit)
     runner.set_handler(handler)
 
-    session: PromptSession[str] = PromptSession(completer=SlashCompleter(active_cwd))
+    session: PromptSession[str] = PromptSession(completer=SlashCompleter(lambda: deps.cwd))
 
     console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value))
 
@@ -235,12 +236,11 @@ async def run_app(
                 continue
 
             if lower in {"/memory", "memory"}:
-                mem_path = harness_memory_path(deps.cwd)
-                if mem_path.is_file():
-                    content = mem_path.read_text(encoding="utf-8")
-                    console.print(f"[bold cyan]Workspace Memory ({mem_path}):[/bold cyan]\n{content.strip()}")
+                memory_block = assemble_memory(deps.cwd)
+                if memory_block.strip():
+                    console.print(f"[bold cyan]Active Memory for {deps.cwd}:[/bold cyan]\n{memory_block.strip()}")
                 else:
-                    console.print(f"Proto - no memory recorded yet ({mem_path} not found).")
+                    console.print(f"Proto - no memory recorded yet for {deps.cwd} (no AGENTS.md or .proto_harness/MEMORY.md).")
                 continue
 
             if lower.startswith("/mode ") or lower == "/mode":
@@ -303,5 +303,5 @@ async def run_app(
     while runner.is_busy:
         await asyncio.sleep(0.05)
 
-    # On-exit memory write-back (non-fatal)
-    await extract_on_exit(handler.message_history, active_cwd)
+    # On-exit memory write-back (non-fatal) to the active working directory
+    await extract_on_exit(handler.message_history, deps.cwd)
