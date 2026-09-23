@@ -179,14 +179,14 @@ Rather than waiting until the model's context window is 100% full, the harness a
 ```mermaid
 flowchart TD
     TurnEnd([Turn Finishes]) --> LegUsage[Read Input Tokens]
-    LegUsage --> UpdateGauge[Update Live Gauge Prompt ○ 15% > ]
+    LegUsage --> UpdateGauge["Update Live Gauge Prompt (○ 15% >)"]
     
-    LegUsage --> CheckMicro{Input Tokens >= 60% Capacity?<br/><i>micro reserve 40%</i>}
+    LegUsage --> CheckMicro{"Input Tokens >= 60% Capacity?<br/>micro reserve 40%"}
     CheckMicro -- No --> Ready([Ready for Next Prompt])
-    CheckMicro -- Yes --> CheckFull{Input Tokens >= 80% Capacity?<br/><i>full reserve 20%</i>}
+    CheckMicro -- Yes --> CheckFull{"Input Tokens >= 80% Capacity?<br/>full reserve 20%"}
     
-    CheckFull -- No --> Micro[<b>Tier 1: Microcompaction</b><br/>In-Memory, Zero LLM Call<br/>Blank older ToolReturnPart bodies<br/>Keep all IDs, calls, and message order]
-    CheckFull -- Yes --> Full[<b>Tier 2: Full Compaction</b><br/>Snap to Compaction Boundary<br/>Summarize older turns via LLM<br/>Replace history: [Summary, *Tail]]
+    CheckFull -- No --> Micro["<b>Tier 1: Microcompaction</b><br/>In-Memory, Zero LLM Call<br/>Blank older ToolReturnPart bodies<br/>Keep all IDs, calls, and message order"]
+    CheckFull -- Yes --> Full["<b>Tier 2: Full Compaction</b><br/>Snap to Compaction Boundary<br/>Summarize older turns via LLM<br/>Replace history: (Summary + Tail)"]
     
     Micro --> EmitMicro[Emit ContextMicrocompacted]
     Full --> EmitFull[Emit ContextCompacted]
