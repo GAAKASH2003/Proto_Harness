@@ -49,9 +49,10 @@ def _build_model() -> Model:
     raise ValueError(f"Unsupported llm_provider: {provider!r}")
 
 
-def build_agent() -> Agent[AgentDeps]:
+def build_agent(model: Model | None = None) -> Agent[AgentDeps]:
     """Build and return the Pydantic AI agent, ready to run turns."""
-    model = _build_model()
+    if model is None:
+        model = _build_model()
 
     agent: Agent[AgentDeps] = Agent(
         model,

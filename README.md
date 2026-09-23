@@ -23,6 +23,7 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 - **Human-in-the-loop (HITL) safety & permission gating** (`DEFAULT`, `PLAN`, `EDIT`, `BYPASS`)
 - **Agent Skills Standard & Progressive Disclosure** (packaged built-ins + repo-local skills)
 - **Persistent Workspace Memory** (`AGENTS.md` ancestor hierarchy + auto-updating `.proto_harness/MEMORY.md`)
+- **Context Window Gauge & Auto-Compaction** (live token occupancy meter, in-memory microcompaction, and boundary-safe LLM summarization)
 - Tool execution sandbox with precise file operations, workspace navigation, and shell safety
 - Rich terminal user interface with unblocked interactive prompts and native Windows VT processing
 
@@ -37,9 +38,11 @@ Proto_Harness/
 │   ├── frontmatter.py          # Shared YAML frontmatter parser for markdown documents
 │   ├── logging.py              # File-based logging to .proto_harness/logs/
 │   ├── config/
-│   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter, skills_dir, memory)
+│   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter, skills_dir, memory, compaction)
+│   ├── context/
+│   │   └── compaction.py       # Two-tier compaction cascade, boundary snapping, and token estimation
 │   ├── entities/
-│   │   ├── events.py           # Domain Event dataclasses (TurnStarted, ToolResult, etc.)
+│   │   ├── events.py           # Domain Event dataclasses (TurnStarted, ContextCompacted, ToolResult, etc.)
 │   │   ├── permissions.py      # PermissionRequest, PermissionDecision, PermissionOutcome
 │   │   └── skill_def.py        # Immutable SkillDef entity
 │   ├── permissions/
@@ -147,6 +150,80 @@ At any point in the REPL, run `/memory` to view all discovered memory files alon
 
 ---
 
+## 🔄 Context Compaction & Live Token Gauge (`context/`)
+
+Long coding sessions inevitably accumulate thousands of tokens of file contents, tool outputs, and test logs. Proto Harness implements a proactive **two-tier compaction cascade** paired with a **real-time visual context gauge** to keep sessions running cleanly and indefinitely without context overflow errors.
+
+### 1. The Real-Time Context Gauge (`○◔◑◕●`)
+
+The pinned prompt continuously monitors provider-authoritative input tokens and displays a dynamic circular gauge with live token counts:
+```text
+○ 0% (884 tok) >
+```
+
+- **Visual Fill Glyphs**:
+  - `○ 0% - 24%` (Empty - 🟢 Green)
+  - `◔ 25% - 49%` (Quarter - 🟢 Green)
+  - `◑ 50% - 74%` (Half - 🟡 Yellow)
+  - `◕ 75% - 99%` (Three-quarters - 🔴 Red)
+  - `● 100%` (Full - 🔴 Red)
+- **Dynamic Prompt States**:
+  - **Idle**: `○ 0% (2,450 tok) > `
+  - **Agent Running**: `working… (or type to queue) > `
+  - **Tool Approval Required**: `allow tool call? [y/N/a] > `
+
+### 2. Two-Tier Compaction Cascade
+
+Rather than waiting until the model's context window is 100% full, the harness acts proactively:
+
+```mermaid
+flowchart TD
+    TurnEnd([Turn Finishes]) --> LegUsage[Read Input Tokens]
+    LegUsage --> UpdateGauge[Update Live Gauge Prompt ○ 15% > ]
+    
+    LegUsage --> CheckMicro{Input Tokens >= 60% Capacity?<br/><i>micro reserve 40%</i>}
+    CheckMicro -- No --> Ready([Ready for Next Prompt])
+    CheckMicro -- Yes --> CheckFull{Input Tokens >= 80% Capacity?<br/><i>full reserve 20%</i>}
+    
+    CheckFull -- No --> Micro[<b>Tier 1: Microcompaction</b><br/>In-Memory, Zero LLM Call<br/>Blank older ToolReturnPart bodies<br/>Keep all IDs, calls, and message order]
+    CheckFull -- Yes --> Full[<b>Tier 2: Full Compaction</b><br/>Snap to Compaction Boundary<br/>Summarize older turns via LLM<br/>Replace history: [Summary, *Tail]]
+    
+    Micro --> EmitMicro[Emit ContextMicrocompacted]
+    Full --> EmitFull[Emit ContextCompacted]
+```
+
+#### Tier 1: Microcompaction (Fast & Free)
+- Fires at **60% capacity** (`microcompaction_reserve_fraction = 0.40`).
+- In-memory only: replaces older bulky tool returns with `[tool output elided by microcompaction]`.
+- Tool call IDs and structure are preserved 100% so tool call/return integrity is never broken.
+
+#### Tier 2: Full Compaction (Structured LLM Summarization)
+- Fires at **80% capacity** (`compaction_reserve_fraction = 0.20`).
+- **Compaction Boundary Snapping**: Safely cuts history so that tool-call and tool-result pairs are never separated.
+- Preserves the recent ~20,000 tokens verbatim so immediate work is not lost.
+- Older turns are summarized into a concise markdown skeleton:
+  ```markdown
+  # Conversation summary
+  ## Goal
+  ## Constraints & Preferences
+  ## Progress (Done / In Progress / Blocked)
+  ## Key Decisions
+  ## Next Steps
+  ## Critical Context
+  ```
+- History is rewritten as `[summary_message, *recent_tail]`.
+
+### 3. Manual Compaction (`/compact`)
+
+At any point in the REPL, run `/compact` to manually trigger compaction and view token savings:
+```text
+○ 0% > /compact
+Proto - compacting context...
+Proto - compacted context (~35,000 tokens -> summary + 4 recent messages).
+```
+
+---
+
 ## 🛡️ Permissions & Human-in-the-Loop (HITL)
 
 Proto Harness includes a full permission layer ensuring the agent cannot mutate files or execute arbitrary shell commands without your consent.
@@ -237,7 +314,8 @@ The agent has access to a structured toolset designed specifically for coding ta
 
 ## 🖥️ Terminal UI (`tui/`)
 
-- **Pinned Input with `patch_stdout(raw=True)`**: Keeps the `> ` prompt pinned at the bottom while Rich logs, panels, and streaming markdown scroll smoothly above it.
+- **Pinned Input with `patch_stdout(raw=True)`**: Keeps the prompt pinned at the bottom while Rich logs, panels, and streaming markdown scroll smoothly above it.
+- **Dynamic Context Gauge & Prompt States**: The prompt shows real-time context occupancy (`○ 0% (884 tok) > `), switches to `working… > ` while the model generates, and renders `allow tool call? [y/N/a] > ` during HITL approvals.
 - **Clean Dialogue Styling**: Distinct background styling for user echo and assistant streaming with green/red bordered panels for tool executions.
 - **Interactive Autocompletion (`SlashCompleter`)**: Press `/` in the prompt to trigger an instant autocomplete menu with descriptions for all commands and skills.
 
@@ -247,10 +325,11 @@ The agent has access to a structured toolset designed specifically for coding ta
 |---|---|
 | `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
+| `/compact` | Manually run full LLM compaction on older conversation history |
 | `/memory` | Inspect the active assembled memory (`AGENTS.md` + `MEMORY.md`) injected into system prompt |
 | `/cd <path>` or `cd <path>` | Change active working directory directly in the REPL |
 | `/pwd` or `pwd` | Display the current working directory |
-| `/clear` or `clear` / `cls` | Clear the terminal and re-display the active configuration banner |
+| `/clear` or `clear` / `cls` | Clear the terminal, reset conversation history, and re-zero the token gauge |
 | `/quit` or `exit` | Exit the assistant (triggers automatic session summarization to `MEMORY.md`) |
 
 ---

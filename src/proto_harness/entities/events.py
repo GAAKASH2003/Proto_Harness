@@ -49,6 +49,22 @@ class PermissionRequested:
     kind: Literal["permission_requested"] = "permission_requested"
 
 
+@dataclass(frozen=True, slots=True)
+class ContextCompacted:
+    """Full LLM compaction ran; older turns were summarized and dropped."""
+    before_tokens: int
+    kept_messages: int
+    kind: Literal["context_compacted"] = "context_compacted"
+
+
+@dataclass(frozen=True, slots=True)
+class ContextMicrocompacted:
+    """Microcompaction ran in-memory; old tool output bodies were blanked."""
+    elided_count: int
+    before_tokens: int
+    kind: Literal["context_microcompacted"] = "context_microcompacted"
+
+
 Event = (
     TurnStarted
     | TurnFinished
@@ -57,4 +73,6 @@ Event = (
     | ToolResult
     | AgentError
     | PermissionRequested
-)
+    | ContextCompacted
+    | ContextMicrocompacted
+)

@@ -17,6 +17,43 @@ from proto_harness.entities import events
 # Subtle gray background distinguishing conversation lines (user echo + assistant stream) from
 # tool panels/errors.
 CONVERSATION_BG = Style(bgcolor="grey15")
+_GAUGE_GLYPHS = "○◔◑◕●"
+
+
+def context_gauge(fraction: float, *, warn_at: float, danger_at: float) -> tuple[str, str]:
+    """Map a context-window fill fraction to a (label, color) pair.
+    
+    Returns plain data (label, color) common to Rich and prompt_toolkit.
+    - label: e.g. "○ 12%", "◑ 62%", "● 85%"
+    - color: "green", "yellow" (warn), or "red" (danger)
+    """
+    clamped = min(1.0, max(0.0, fraction))
+    glyph = _GAUGE_GLYPHS[round(clamped * 4)]
+    label = f"{glyph} {round(clamped * 100)}%"
+    if clamped >= danger_at:
+        color = "red"
+    elif clamped >= warn_at:
+        color = "yellow"
+    else:
+        color = "green"
+    return label, color
+
+
+def _render_context_compacted(event: events.ContextCompacted) -> Text:
+    """A dim system line noting full compaction ran."""
+    return Text(
+        f"Proto - compacted context (~{event.before_tokens} tokens -> "
+        f"summary + {event.kept_messages} recent messages).",
+        style="dim",
+    )
+
+def _render_context_microcompacted(event: events.ContextMicrocompacted) -> Text:
+    """A dim system line noting microcompaction blanked old tool outputs."""
+    return Text(
+        f"Proto - microcompacted context (elided {event.elided_count} old tool output(s), "
+        f"~{event.before_tokens} tokens).",
+        style="dim",
+    )
 
 
 def render_event(event: events.Event) -> RenderableType:
@@ -35,6 +72,10 @@ def render_event(event: events.Event) -> RenderableType:
         return _render_agent_error(event)
     if isinstance(event, events.PermissionRequested):
         return _render_permission_requested(event)
+    if isinstance(event, events.ContextCompacted):
+        return _render_context_compacted(event)
+    if isinstance(event, events.ContextMicrocompacted):
+        return _render_context_microcompacted(event)
     raise TypeError(f"render_event got an unsupported event type: {type(event).__name__!r}")
 
 

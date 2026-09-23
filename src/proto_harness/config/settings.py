@@ -45,6 +45,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    compaction_enabled: bool = True
+    compaction_context_window_tokens: int = 1_048_576
+    compaction_reserve_fraction: float = 0.20
+    microcompaction_reserve_fraction: float = 0.40
+    compaction_keep_recent_tokens: int = 20_000
+    
     # Tool execution
     bash_timeout_s: float = 120.0
     skills_dir: Path = Path(".proto_harness/skills")

@@ -35,6 +35,8 @@ from proto_harness.memory.service import assemble_memory
 from proto_harness.skills.loader import load_skills
 from proto_harness.skills.payload import format_skill_payload
 from proto_harness.tui import render
+from prompt_toolkit.formatted_text import HTML
+from proto_harness.context.compaction import CompactOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,7 @@ class SlashCompleter(Completer):
         self._base_commands = {
             "/mode": "switch or view permission mode (/mode <name>)",
             "/memory": "inspect current workspace memory (/memory)",
+            "/compact": "compact conversation history (/compact)",
             "/cd": "change working directory (/cd <path>)",
             "/pwd": "print current working directory",
             "/clear": "clear the terminal screen",
@@ -138,6 +141,9 @@ def _make_event_sink(console: Console) -> Callable[[events.Event], None]:
         _flush()
         if isinstance(event, events.TurnStarted):
             state["need_prefix"] = True
+            console.print(render.render_event(event))
+            console.print(Text("agent thinking...", style="dim cyan"))
+            return
         console.print(render.render_event(event))
 
     return on_event
@@ -203,10 +209,24 @@ async def run_app(
 
     console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value))
 
+    def _get_prompt() -> HTML:
+        if decisions.pending:
+            return HTML('<style fg="yellow">allow tool call? [y/N/a]</style> > ')
+        if runner.is_busy:
+            return HTML('<style fg="cyan">working… (or type to queue)</style> > ')
+        window = settings.compaction_context_window_tokens
+        fraction = handler.last_input_tokens / window if window > 0 else 0.0
+        warn_at = 1 - settings.microcompaction_reserve_fraction
+        danger_at = 1 - settings.compaction_reserve_fraction
+        label, color = render.context_gauge(fraction, warn_at=warn_at, danger_at=danger_at)
+        tokens_str = f" ({handler.last_input_tokens:,} tok)" if handler.last_input_tokens > 0 else ""
+        return HTML(f'<style fg="{color}">{label}{tokens_str}</style> > ')
+
+
     with patch_stdout(raw=True):
         while True:
             try:
-                user_input = await session.prompt_async(_PROMPT)
+                user_input = await session.prompt_async(_get_prompt)
             except (EOFError, KeyboardInterrupt):
                 if decisions.pending:
                     decisions.cancel()
@@ -226,11 +246,6 @@ async def run_app(
             if lower in _QUIT_COMMANDS:
                 break
 
-            if lower in _CLEAR_COMMANDS:
-                console.clear()
-                console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value))
-                continue
-
             if lower in {"/pwd", "/cwd", "pwd"}:
                 console.print(f"Proto - cwd: {deps.cwd}")
                 continue
@@ -242,6 +257,22 @@ async def run_app(
                 else:
                     console.print(f"Proto - no memory recorded yet for {deps.cwd} (no AGENTS.md or .proto_harness/MEMORY.md).")
                 continue
+
+            if lower in {"/compact", "compact"}:
+                console.print("Proto - compacting context...")
+                outcome = await handler.compact()
+                if outcome == CompactOutcome.NOTHING_TO_COMPACT:
+                    console.print("Proto - nothing to compact (history fits within recent token budget).")
+                elif outcome == CompactOutcome.SUMMARIZER_FAILED:
+                    console.print("[red]Proto - compaction failed: summarizer call failed or returned empty.[/red]")
+                continue
+            
+            if lower in _CLEAR_COMMANDS:
+                console.clear()
+                handler.clear()
+                console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value))
+                continue
+
 
             if lower.startswith("/mode ") or lower == "/mode":
                 parts = text.split(" ", 1)
@@ -297,6 +328,8 @@ async def run_app(
                     console.print(f"Proto - unknown command '/{skill_name}'; available skills: {available}")
                     continue
 
+            if runner.is_busy:
+                console.print("[dim cyan]Proto - turn in progress; queued message as follow-up.[/dim cyan]")
             await runner.submit(text)
 
     # Wait for the active turn to finish before exit
