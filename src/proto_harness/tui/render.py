@@ -14,6 +14,7 @@ from rich.text import Text
 
 from proto_harness.entities import events
 
+
 # Subtle gray background distinguishing conversation lines (user echo + assistant stream) from
 # tool panels/errors.
 CONVERSATION_BG = Style(bgcolor="grey15")
@@ -56,6 +57,13 @@ def _render_context_microcompacted(event: events.ContextMicrocompacted) -> Text:
     )
 
 
+def _render_task_list_updated(event: events.TaskListUpdated) -> Panel:
+    """The current in-memory task list (TodoWrite) as a clean checklist panel."""
+    body = Text("\n".join(event.tasks) or "(no tasks)")
+    return Panel(body, title="[bold]tasks[/bold]", title_align="left", border_style="blue")
+
+
+
 def render_event(event: events.Event) -> RenderableType:
     """Map a single canonical event to its Rich renderable."""
     if isinstance(event, events.AssistantTextDelta):
@@ -76,6 +84,8 @@ def render_event(event: events.Event) -> RenderableType:
         return _render_context_compacted(event)
     if isinstance(event, events.ContextMicrocompacted):
         return _render_context_microcompacted(event)
+    if isinstance(event, events.TaskListUpdated):
+        return _render_task_list_updated(event)
     raise TypeError(f"render_event got an unsupported event type: {type(event).__name__!r}")
 
 

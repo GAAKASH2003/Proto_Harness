@@ -37,6 +37,7 @@ from proto_harness.skills.payload import format_skill_payload
 from proto_harness.tui import render
 from prompt_toolkit.formatted_text import HTML
 from proto_harness.context.compaction import CompactOutcome
+from proto_harness.tools.tasks import _checklist_lines
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class SlashCompleter(Completer):
         self._get_cwd = get_cwd
         self._base_commands = {
             "/mode": "switch or view permission mode (/mode <name>)",
+            "/tasks": "inspect current task checklist (/tasks)",
             "/memory": "inspect current workspace memory (/memory)",
             "/compact": "compact conversation history (/compact)",
             "/cd": "change working directory (/cd <path>)",
@@ -267,6 +269,16 @@ async def run_app(
                     console.print("[red]Proto - compaction failed: summarizer call failed or returned empty.[/red]")
                 continue
             
+
+            if lower in {"/tasks", "/todo", "tasks", "todo"}:
+                if not deps.task_store:
+                    console.print("Proto - no active tasks in this session.")
+                else:
+                    lines = _checklist_lines(deps.task_store)
+                    console.print(render.render_event(events.TaskListUpdated(tasks=lines)))
+                continue
+
+
             if lower in _CLEAR_COMMANDS:
                 console.clear()
                 handler.clear()

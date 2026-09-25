@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 @dataclass(frozen=True,slots=True)
@@ -64,6 +64,12 @@ class ContextMicrocompacted:
     before_tokens: int
     kind: Literal["context_microcompacted"] = "context_microcompacted"
 
+@dataclass(frozen=True, slots=True)
+class TaskListUpdated:
+    tasks:tuple[str,...]=field(default_factory=tuple)
+    kind:Literal["task_list_updated"]="task_list_updated"
+
+
 
 Event = (
     TurnStarted
@@ -75,4 +81,5 @@ Event = (
     | PermissionRequested
     | ContextCompacted
     | ContextMicrocompacted
-)
+    | TaskListUpdated
+)

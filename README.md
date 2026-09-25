@@ -309,6 +309,7 @@ The agent has access to a structured toolset designed specifically for coding ta
 | `find_files(pattern)` | `READ_ONLY` | Locate workspace files | Glob pattern matching |
 | `grep(pattern, path)` | `READ_ONLY` | Search code patterns | Regex or substring search within workspace |
 | `skill(name)` | `READ_ONLY` | Load skill instructions | Progressive disclosure; returns `ModelRetry` on unknown skills |
+| `todo_write(tasks)` | `READ_ONLY` | Manage structured task checklist | Replace semantics; emits `TaskListUpdated` event with `[ ]`, `[~]`, `[x]` |
 
 ---
 
@@ -317,6 +318,7 @@ The agent has access to a structured toolset designed specifically for coding ta
 - **Pinned Input with `patch_stdout(raw=True)`**: Keeps the prompt pinned at the bottom while Rich logs, panels, and streaming markdown scroll smoothly above it.
 - **Dynamic Context Gauge & Prompt States**: The prompt shows real-time context occupancy (`○ 0% (884 tok) > `), switches to `working… > ` while the model generates, and renders `allow tool call? [y/N/a] > ` during HITL approvals.
 - **Clean Dialogue Styling**: Distinct background styling for user echo and assistant streaming with green/red bordered panels for tool executions.
+- **Live Task Checklist Panel**: Redraws automatically whenever the model updates progress with `todo_write`.
 - **Interactive Autocompletion (`SlashCompleter`)**: Press `/` in the prompt to trigger an instant autocomplete menu with descriptions for all commands and skills.
 
 ### Interactive REPL Commands
@@ -324,6 +326,7 @@ The agent has access to a structured toolset designed specifically for coding ta
 | Command | Action |
 |---|---|
 | `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
+| `/tasks` or `/todo` | Inspect the current in-memory task checklist (`[ ]`, `[~]`, `[x]`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
 | `/compact` | Manually run full LLM compaction on older conversation history |
 | `/memory` | Inspect the active assembled memory (`AGENTS.md` + `MEMORY.md`) injected into system prompt |
