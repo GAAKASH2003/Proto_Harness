@@ -9,23 +9,33 @@ from proto_harness.tools.bash import bash
 from proto_harness.tools.files import cd, edit, pwd, read, write
 from proto_harness.tools.skills import skill
 from proto_harness.tools.tasks import todo_write
-
+from proto_harness.tools.orchestration import enter_plan_mode, exit_plan_mode
 
 logger = logging.getLogger(__name__)
 
+ALL_TOOLS: dict[str, Callable[..., Any]] = {
+    "read": read,
+    "write": write,
+    "edit": edit,
+    "cd": cd,
+    "pwd": pwd,
+    "bash": bash,
+    "skill": skill,
+    "todo_write": todo_write,
+    "enter_plan_mode": enter_plan_mode,
+    "exit_plan_mode": exit_plan_mode,
+}
 
-def register_tools(agent: Agent[AgentDeps]) -> None:
-    """Register all tools onto the agent.
 
-    Called once by build_agent() in factory.py.
-    To add a new tool: import it here and call agent.tool().
-    """
-    agent.tool(read)
-    agent.tool(write)
-    agent.tool(edit)
-    agent.tool(cd)
-    agent.tool(pwd)
-    agent.tool(bash)
-    agent.tool(skill)
-    agent.tool(todo_write)
-    logger.debug("Registered tools: read, write, edit, cd, pwd, bash")
+def register_tools(
+    agent: Agent[AgentDeps],
+    allowed_tools: tuple[str, ...] | None = None,
+) -> None:
+    tools_to_register = (
+        {name: ALL_TOOLS[name] for name in allowed_tools if name in ALL_TOOLS}
+        if allowed_tools is not None
+        else ALL_TOOLS
+    )
+    for tool_fn in tools_to_register.values():
+        agent.tool(tool_fn)
+    logger.debug("Registered %d tools: %s", len(tools_to_register), sorted(tools_to_register))

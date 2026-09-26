@@ -17,13 +17,32 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_BYTES = 50_000
 
 
+_READ_ONLY_PREFIXES = (
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+    "git branch",
+    "git rev-parse",
+    "git tag",
+    "git remote",
+)
+
+
+def _is_read_only_command(command: str) -> bool:
+    """Check if a shell command is a safe read-only query (e.g. git status, git diff)."""
+    cmd = command.strip().lower()
+    return any(cmd == prefix or cmd.startswith(f"{prefix} ") for prefix in _READ_ONLY_PREFIXES)
+
+
 async def bash(ctx: RunContext[AgentDeps], command: str) -> str:
     """Run a shell command and return its output (stdout + stderr combined).
 
     Args:
         command: The shell command to run.
     """
-    await check_permission(ctx, "bash", f"command={command!r}", ToolKind.OTHER)
+    kind = ToolKind.READ_ONLY if _is_read_only_command(command) else ToolKind.OTHER
+    await check_permission(ctx, "bash", f"command={command!r}", kind)
     logger.debug("bash: %r (cwd=%s)", command, ctx.deps.cwd)
 
     try:

@@ -38,6 +38,8 @@ from proto_harness.tui import render
 from prompt_toolkit.formatted_text import HTML
 from proto_harness.context.compaction import CompactOutcome
 from proto_harness.tools.tasks import _checklist_lines
+from proto_harness.agents.loader import load_agent, load_agents
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,9 @@ _CLEAR_COMMANDS = {"/clear", "/cls", "clear", "cls"}
 _PROMPT = "> "
 _ASSISTANT_PREFIX = "Agent:: "
 
-def startup_banner(provider: str, model: str, cwd: Path, mode:str) -> str:
-    """The startup banner: provider:model and active workspace."""
-    return f"Agent - {provider}:{model} - cwd:{cwd} - mode:{mode} - type a line; /quit exits."
+def startup_banner(provider: str, model: str, cwd: Path, mode: str, agent_name: str = "build") -> str:
+    """The startup banner: provider:model, active persona, and workspace."""
+    return f"Agent [{agent_name}] - {provider}:{model} - cwd:{cwd} - mode:{mode} - type a line; /quit exits."
 
 
 def parse_skill_command(line: str) -> tuple[str, str] | None:
@@ -69,6 +71,8 @@ class SlashCompleter(Completer):
     def __init__(self, get_cwd: Callable[[], Path]) -> None:
         self._get_cwd = get_cwd
         self._base_commands = {
+            "/agent": "switch active agent persona (/agent <name>)",
+            "/agents": "list available agent personas",
             "/mode": "switch or view permission mode (/mode <name>)",
             "/tasks": "inspect current task checklist (/tasks)",
             "/memory": "inspect current workspace memory (/memory)",
@@ -81,6 +85,14 @@ class SlashCompleter(Completer):
 
     def get_completions(self, document: Document, complete_event):
         text = document.text_before_cursor
+        if text.startswith("/agent ") and text.count(" ") == 1:
+            prefix = text[len("/agent ") :]
+            agents = load_agents(self._get_cwd())
+            for name, a in agents.items():
+                if name.startswith(prefix):
+                    yield Completion(f"/agent {name}", start_position=-len(text), display_meta=a.description)
+            return
+
         if not text.startswith("/") or " " in text:
             return
 
@@ -186,8 +198,8 @@ async def run_app(
     emit = _make_event_sink(console)
 
     active_cwd = (cwd or Path.cwd()).resolve()
-
-    initial_mode = PermissionMode.DEFAULT
+    active_agent = load_agent("build", cwd=active_cwd)
+    initial_mode = active_agent.mode
     if mode is not None:
         initial_mode = PermissionMode(mode.lower()) if isinstance(mode, str) else mode
 
@@ -195,12 +207,18 @@ async def run_app(
     decisions = DecisionChannel()
     resolve_permission = _make_permission_resolver(decisions, console, gate)
 
-    agent = build_agent()
+    async def resolve_user_question(question: str) -> str:
+        console.print(Text(question, style="bold yellow"))
+        return await decisions.request()
+
+    agent = build_agent(agent_def=active_agent)
     deps = AgentDeps(
         cwd=active_cwd,
         emit=emit,
         gate=gate,
         resolve_permission=resolve_permission,
+        resolve_user_question=resolve_user_question,
+        active_agent=active_agent
     )
     handler = AgentTurnHandler(agent=agent, deps=deps)
 
@@ -209,7 +227,8 @@ async def run_app(
 
     session: PromptSession[str] = PromptSession(completer=SlashCompleter(lambda: deps.cwd))
 
-    console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value))
+    console.print(startup_banner(settings.llm_provider, settings.active_model, deps.cwd, gate.mode.value, agent_name=deps.active_agent.name))
+
 
     def _get_prompt() -> HTML:
         if decisions.pending:
@@ -269,6 +288,7 @@ async def run_app(
                     console.print("[red]Proto - compaction failed: summarizer call failed or returned empty.[/red]")
                 continue
             
+     
 
             if lower in {"/tasks", "/todo", "tasks", "todo"}:
                 if not deps.task_store:
@@ -322,6 +342,34 @@ async def run_app(
                     console.print(f"Proto - cwd: {deps.cwd}")
                 else:
                     console.print(f"Proto - directory not found: {raw_path}")
+                continue
+            
+            if lower in {"/agents", "agents"}:
+                all_agents = load_agents(deps.cwd)
+                console.print("[bold cyan]Available Agent Personas:[/bold cyan]")
+                for name, a in sorted(all_agents.items()):
+                    is_active = deps.active_agent and deps.active_agent.name == name
+                    active_marker = " [bold green](active)[/bold green]" if is_active else ""
+                    tools_list = ", ".join(a.tools)
+                    console.print(f"  • [bold]{name}[/bold]{active_marker} (mode: {a.mode.value})\n    {a.description}\n    [dim]tools: {tools_list}[/dim]")
+                continue
+
+            if lower.startswith("/agent ") or lower.startswith("agent ") or lower in {"/agent", "agent"}:
+                parts = text.split(" ", 1)
+                target_name = parts[1].strip().lower() if len(parts) > 1 else ""
+                if not target_name:
+                    current = deps.active_agent.name if deps.active_agent else "build"
+                    console.print(f"Proto - current agent: [bold green]{current}[/bold green] (use `/agent <name>` or `/agents` to list)")
+                    continue
+                try:
+                    new_agent_def = load_agent(target_name, deps.cwd)
+                    new_agent = build_agent(agent_def=new_agent_def)
+                    handler.agent = new_agent
+                    deps.active_agent = new_agent_def
+                    gate.set_mode(new_agent_def.mode)
+                    console.print(f"Proto - switched to persona: [bold green]{new_agent_def.name}[/bold green] (mode: {new_agent_def.mode.value})")
+                except ValueError as exc:
+                    console.print(f"[red]Proto - {exc}[/red]")
                 continue
 
             # Check for skill execution (e.g. /commit or /code-review)

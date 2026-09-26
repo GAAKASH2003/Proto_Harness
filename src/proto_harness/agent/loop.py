@@ -85,6 +85,15 @@ class AgentTurnHandler:
         """The input tokens from the last turn, read by the TUI gauge."""
         return self._last_input_tokens
 
+    @property
+    def agent(self) -> Agent[AgentDeps]:
+        return self._agent
+
+    @agent.setter
+    def agent(self, new_agent: Agent[AgentDeps]) -> None:
+        self._agent = new_agent
+
+
     async def run_turn(self, prompt: str) -> None:
         """Run one full user turn: call the LLM, stream events, update history."""
         self._turn_id += 1

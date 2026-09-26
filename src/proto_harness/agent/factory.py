@@ -14,6 +14,9 @@ from proto_harness.config.settings import settings
 from proto_harness.memory.service import assemble_memory
 from proto_harness.skills.catalog import assemble_skills_catalog
 from proto_harness.tools.registry import register_tools
+from proto_harness.agents.loader import load_agent
+from proto_harness.entities.agent_def import AgentDef
+
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +54,14 @@ def _build_model() -> Model:
 
     raise ValueError(f"Unsupported llm_provider: {provider!r}")
 
+def build_agent(
+    agent_def: AgentDef | None = None,
+    model: Model | None = None,
+) -> Agent[AgentDeps]:
+    """Build and return the Pydantic AI agent configured for a specific persona."""
+    if agent_def is None:
+        agent_def = load_agent("build")
 
-def build_agent(model: Model | None = None) -> Agent[AgentDeps]:
-    """Build and return the Pydantic AI agent, ready to run turns."""
     if model is None:
         model = _build_model()
 
@@ -64,12 +72,19 @@ def build_agent(model: Model | None = None) -> Agent[AgentDeps]:
 
     @agent.system_prompt
     def assemble_instructions(ctx: RunContext[AgentDeps]) -> str:
+        base_prompt = agent_def.prompt
         memory = assemble_memory(ctx.deps.cwd)
         catalog = assemble_skills_catalog(ctx.deps.cwd)
-        parts = (_SYSTEM_PROMPT, memory, catalog)
+        parts = (base_prompt, memory, catalog)
         return "\n\n".join(part for part in parts if part)
 
-    register_tools(agent)
+    register_tools(agent, allowed_tools=agent_def.tools)
 
-    logger.debug("Built agent on llm_provider=%s model=%s", settings.llm_provider, settings.active_model)
+    logger.debug(
+        "Built agent persona=%s tools=%s on llm_provider=%s model=%s",
+        agent_def.name,
+        agent_def.tools,
+        settings.llm_provider,
+        settings.active_model,
+    )
     return agent

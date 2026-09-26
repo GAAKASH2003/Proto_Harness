@@ -310,6 +310,23 @@ The agent has access to a structured toolset designed specifically for coding ta
 | `grep(pattern, path)` | `READ_ONLY` | Search code patterns | Regex or substring search within workspace |
 | `skill(name)` | `READ_ONLY` | Load skill instructions | Progressive disclosure; returns `ModelRetry` on unknown skills |
 | `todo_write(tasks)` | `READ_ONLY` | Manage structured task checklist | Replace semantics; emits `TaskListUpdated` event with `[ ]`, `[~]`, `[x]` |
+| `enter_plan_mode()` | `READ_ONLY` | Enter read-only planning mode | Programmatically switches session to `PLAN` mode |
+| `exit_plan_mode(plan)` | `READ_ONLY` | Present plan and request approval | Asks human `[y/N]` via DecisionChannel; switches to `EDIT` on approval |
+
+---
+
+## 🎭 Agent Catalog & Personas (`agents/`)
+
+Proto-Harness supports specialized agent personas defined in Markdown files with YAML frontmatter:
+
+| Persona | Purpose | Default Mode | Key Tools |
+|---|---|---|---|
+| **`build`** (default) | Hands-on coding agent that reads, edits, runs commands, and tracks tasks | `DEFAULT` | Full toolset (`read`, `write`, `edit`, `bash`, `skill`, `todo_write`, `enter_plan_mode`) |
+| **`plan`** | Safe read-only architect that explores codebase and drafts plans | `PLAN` | Safe tools + `todo_write` + `exit_plan_mode` |
+| **`code-reviewer`** | Reviews code changes and git diffs for correctness and edge cases | `PLAN` | `read`, `bash` (`git`), `todo_write` |
+| **`explore`** | Fast codebase reconnaissance without modifying files | `PLAN` | Read and navigation tools |
+
+Switch personas mid-session anytime using `/agent <name>` — conversation history, memory, and task state are completely preserved!
 
 ---
 
@@ -319,12 +336,14 @@ The agent has access to a structured toolset designed specifically for coding ta
 - **Dynamic Context Gauge & Prompt States**: The prompt shows real-time context occupancy (`○ 0% (884 tok) > `), switches to `working… > ` while the model generates, and renders `allow tool call? [y/N/a] > ` during HITL approvals.
 - **Clean Dialogue Styling**: Distinct background styling for user echo and assistant streaming with green/red bordered panels for tool executions.
 - **Live Task Checklist Panel**: Redraws automatically whenever the model updates progress with `todo_write`.
-- **Interactive Autocompletion (`SlashCompleter`)**: Press `/` in the prompt to trigger an instant autocomplete menu with descriptions for all commands and skills.
+- **Interactive Autocompletion (`SlashCompleter`)**: Press `/` in the prompt to trigger an instant autocomplete menu with descriptions for all commands, skills, and agent personas (`/agent <name>`).
 
 ### Interactive REPL Commands
 
 | Command | Action |
 |---|---|
+| `/agent [name]` | View active persona or switch to another (e.g. `/agent plan`, `/agent build`) |
+| `/agents` | List all available agent personas, their modes, descriptions, and allowed tools |
 | `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
 | `/tasks` or `/todo` | Inspect the current in-memory task checklist (`[ ]`, `[~]`, `[x]`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
