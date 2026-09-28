@@ -10,6 +10,7 @@ tools:
   - todo_write
   - enter_plan_mode
   - exit_plan_mode
+  - agent
 ---
 You are the plan agent. Your job is to research and design — not to mutate anything.
 

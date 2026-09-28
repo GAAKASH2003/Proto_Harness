@@ -10,6 +10,7 @@ from proto_harness.tools.files import cd, edit, pwd, read, write
 from proto_harness.tools.skills import skill
 from proto_harness.tools.tasks import todo_write
 from proto_harness.tools.orchestration import enter_plan_mode, exit_plan_mode
+from proto_harness.tools.agent import agent
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ ALL_TOOLS: dict[str, Callable[..., Any]] = {
     "todo_write": todo_write,
     "enter_plan_mode": enter_plan_mode,
     "exit_plan_mode": exit_plan_mode,
+    "agent": agent
 }
 
 
@@ -36,6 +38,9 @@ def register_tools(
         if allowed_tools is not None
         else ALL_TOOLS
     )
-    for tool_fn in tools_to_register.values():
-        agent.tool(tool_fn)
+    for name, tool_fn in tools_to_register.items():
+        if name == "agent":
+            agent.tool(tool_fn, retries=3)
+        else:
+            agent.tool(tool_fn)
     logger.debug("Registered %d tools: %s", len(tools_to_register), sorted(tools_to_register))

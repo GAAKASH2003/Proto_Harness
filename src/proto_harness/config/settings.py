@@ -4,7 +4,7 @@ from typing import Literal
 
 
 # pyrefly: ignore [missing-import]
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 # pyrefly: ignore [missing-import]
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,17 +40,22 @@ class Settings(BaseSettings):
     openrouter_model: str = "nvidia/nemotron-3.5-lightning:free"
     
     memory_filename: str = "MEMORY.md"
-    memory_max_lines: int = 200
-    memory_max_bytes: int = 20_000
+    memory_max_lines: int = Field(default=200, ge=10, le=5000)
+    memory_max_bytes: int = Field(default=20_000, ge=1000)
 
     log_level: str = "INFO"
 
     compaction_enabled: bool = True
-    compaction_context_window_tokens: int = 1_048_576
-    compaction_reserve_fraction: float = 0.20
-    microcompaction_reserve_fraction: float = 0.40
-    compaction_keep_recent_tokens: int = 20_000
+    compaction_context_window_tokens: int = Field(default=1_048_576, ge=10_000)
+    compaction_reserve_fraction: float = Field(default=0.20, ge=0.0, le=1.0)
+    microcompaction_reserve_fraction: float = Field(default=0.40, ge=0.0, le=1.0)
+    compaction_keep_recent_tokens: int = Field(default=20_000, ge=1000)
     
+    # Subagents & Multi-Agent Fanout
+    subagent_max_parallel: int = Field(default=4, ge=1, le=16)
+    subagent_result_max_bytes: int = Field(default=16_000, ge=1000)
+    subagent_request_limit: int = Field(default=15, ge=1, le=50)
+
     # Tool execution
     bash_timeout_s: float = 120.0
     skills_dir: Path = Path(".proto_harness/skills")

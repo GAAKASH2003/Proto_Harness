@@ -13,6 +13,7 @@ class AgentDef:
     tools: tuple[str, ...]
     mode: PermissionMode
     prompt: str
+    subagent: bool = False
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -21,6 +22,9 @@ class AgentDef:
             raise ValueError(f"agent {self.name!r} must have a non-empty description")
         if not self.prompt.strip():
             raise ValueError(f"agent {self.name!r} must have a non-empty prompt")
+
+        # Deduplicate tools while preserving order and ensuring tuple type
+        object.__setattr__(self, "tools", tuple(dict.fromkeys(self.tools)))
 
         unknown = [tool for tool in self.tools if tool not in KNOWN_TOOL_NAMES]
         if unknown:

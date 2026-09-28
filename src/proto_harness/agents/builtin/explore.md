@@ -2,6 +2,7 @@
 name: explore
 description: Fast read-only reconnaissance across files and directories without making changes.
 mode: plan
+subagent: true
 tools:
   - read
   - cd

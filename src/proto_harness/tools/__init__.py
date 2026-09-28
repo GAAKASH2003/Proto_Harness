@@ -14,5 +14,6 @@ KNOWN_TOOL_NAMES: frozenset[str] = frozenset(
         "todo_write",
         "enter_plan_mode",
         "exit_plan_mode",
+        "agent",
     }
 )

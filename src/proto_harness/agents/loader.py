@@ -23,13 +23,32 @@ def parse_agent_file(text: str) -> AgentDef:
     description = _require_str(meta, "description")
     tools = _require_str_tuple(meta, "tools")
     mode = _parse_mode(meta.get("mode"))
+    subagent = bool(meta.get("subagent", False))
+
     return AgentDef(
         name=name,
         description=description,
         tools=tools,
         mode=mode,
         prompt=body.strip(),
+        subagent=subagent
     )
+
+def load_primary_agent(name: str, cwd: Path | None = None) -> AgentDef:
+    """Return the primary agent, rejecting subagents from being chosen as main agent."""
+    agents = load_agents(cwd)
+    primaries = ", ".join(sorted(n for n, a in agents.items() if not a.subagent))
+    agent = agents.get(name)
+    if agent is None:
+        raise ValueError(f"no such agent {name!r}; available agents: {primaries}")
+    if agent.subagent:
+        raise ValueError(
+            f"agent {name!r} is a subagent and cannot be selected as a main agent; "
+            f"available agents: {primaries}"
+        )
+    return agent
+
+
 
 def load_builtin_agents() -> dict[str, AgentDef]:
     """Read and validate all bundled built-in agents, keyed by name."""

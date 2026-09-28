@@ -9,6 +9,7 @@ tools:
   - bash
   - skill
   - todo_write
+  - agent
 ---
 You are the code-reviewer agent. You review changes; you do not make them.
 

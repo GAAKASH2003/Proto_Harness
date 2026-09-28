@@ -12,6 +12,7 @@ tools:
   - skill
   - todo_write
   - enter_plan_mode
+  - agent
 ---
 You are the build agent — a capable, hands-on coding assistant working inside the user's project.
 
