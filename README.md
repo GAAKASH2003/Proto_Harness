@@ -20,6 +20,8 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 - The turn lifecycle and state management
 - Real-time token streaming and structured event propagation
 - Concurrency and message queuing (steering & follow-up queues)
+- **Headless Runtime & Durable Execution** (`proto run "<task>"` with pipe-clean stdout, stderr tool streaming, and `.proto_harness/runs/` checkpoint journals)
+- **Multi-API-Key Load Balancing & Failover** (round-robin turn rotation and automatic retry failover across multiple Gemini keys)
 - **Human-in-the-loop (HITL) safety & permission gating** (`DEFAULT`, `PLAN`, `EDIT`, `BYPASS`)
 - **Agent Skills Standard & Progressive Disclosure** (packaged built-ins + repo-local skills)
 - **Persistent Workspace Memory** (`AGENTS.md` ancestor hierarchy + auto-updating `.proto_harness/MEMORY.md`)
@@ -63,6 +65,8 @@ Proto_Harness/
 │   │   ├── deps.py             # Agent dependencies (cwd, emit, gate, resolve_permission)
 │   │   ├── factory.py          # Model selection, agent factory, and dynamic memory/catalog hook
 │   │   └── loop.py             # Headless turn handler (Pydantic AI stream)
+│   ├── runtime/
+│   │   └── runner.py           # Headless execution driver & durable checkpoint journal (.proto_harness/runs/)
 │   ├── harness/
 │   │   ├── decisions.py        # DecisionChannel for async mid-turn HITL approval
 │   │   ├── queue.py            # Interaction queues (steering & follow-up)
@@ -356,6 +360,108 @@ Switch personas mid-session anytime using `/agent <name>` — conversation histo
 
 ---
 
+## ⚡ Headless Runtime & Durable Execution (`runtime/`)
+
+In addition to the interactive TUI, Proto Harness features an unattended **headless runtime** designed for scriptability, continuous integration (CI), and multi-turn autonomous automation.
+
+Run single tasks directly from your shell using `proto run "<prompt>"`:
+
+```powershell
+proto run "Examine the git status and summarize modified files"
+```
+
+### 1. Pipe-Clean Standard Output & Stream Separation
+A common flaw in agent harnesses is mixing debugging logs with the agent's actual answer, breaking Unix composability. Proto Harness strictly separates output streams:
+- **`stdout` (Pipe-Clean)**: Emits **only** the model's final response text with zero ANSI escape codes. You can cleanly redirect output directly into files, linters, or downstream CLI tools (`jq`, `grep`):
+  ```powershell
+  # Save clean markdown directly to file
+  proto run "Extract the public API surface of src/proto_harness/runtime/" > api_docs.md
+
+  # Pipe directly into other programs
+  proto run "List all untracked files as JSON" | jq .
+  ```
+- **`stderr` (Progress & Diagnostic Channel)**: Emits real-time tool execution markers formatted as `-> <tool_name> <arguments>` (e.g. `-> read {"path": "src/main.py"}`). If you don't want progress messages printed to stderr, pass `--quiet` / `-q`.
+
+### 2. Durable Step Checkpointing (`.proto_harness/runs/`)
+Every headless execution is tracked as a durable run journal saved under `<workspace>/.proto_harness/runs/<run_id>.json`.
+
+Each journal persists complete execution metadata and step-by-step history:
+```json
+{
+  "run_id": "run_20260929_181140_a1b2c3d4",
+  "agent": "build",
+  "mode": "bypass",
+  "cwd": "C:/Projects/Proto_Harness",
+  "prompt": "Inspect the project structure and list python files",
+  "final_response": "The project contains the following Python packages...",
+  "start_time": "2026-09-29T18:11:40.123456",
+  "end_time": "2026-09-29T18:11:43.789012",
+  "duration_seconds": 3.66,
+  "steps": [
+    {
+      "step": 1,
+      "kind": "user_prompt",
+      "timestamp": "2026-09-29T18:11:40.125000",
+      "content": "Inspect the project structure..."
+    },
+    {
+      "step": 2,
+      "kind": "tool_call",
+      "timestamp": "2026-09-29T18:11:41.200000",
+      "tool": "find_files",
+      "args": {"pattern": "*.py"}
+    },
+    {
+      "step": 3,
+      "kind": "tool_result",
+      "timestamp": "2026-09-29T18:11:41.250000",
+      "tool": "find_files",
+      "result": "src/proto_harness/cli.py\n..."
+    },
+    {
+      "step": 4,
+      "kind": "model_response",
+      "timestamp": "2026-09-29T18:11:43.780000",
+      "content": "The project contains the following Python packages..."
+    }
+  ]
+}
+```
+
+### 3. Programmatic Python API
+The headless runner can also be integrated directly into custom Python workflows, test suites, or orchestrators:
+
+```python
+import asyncio
+from pathlib import Path
+from proto_harness.runtime import run_headless
+
+async def main():
+    result = await run_headless(
+        prompt="Review recent commits for security issues",
+        cwd=Path("."),
+        agent_name="code-reviewer",
+        mode="plan",
+        quiet=False,
+    )
+    print(f"Run ID: {result.run_id}")
+    print(f"Response: {result.final_response}")
+
+asyncio.run(main())
+```
+
+---
+
+## 🔀 Multi-API-Key Load Balancing & Rate Limit Failover
+
+To prevent Google Gemini rate limit errors (`429 ResourceExhausted` or `503 Unavailable`) during intensive development sessions, Proto Harness includes built-in multi-key pooling and failover:
+
+1. **Automatic Key Pooling**: Discovers any `GEMINI_API_KEY`, `GEMINI_API_KEY1`, `GEMINI_API_KEY2`, etc. configured in your environment or `.env` file.
+2. **Turn-Level Round-Robin**: Rotates model requests evenly across available keys turn by turn to distribute quota.
+3. **Attempt-Based In-Turn Failover**: If an active key hits a quota exhaustion error (HTTP 429 / 503), the harness intercepts the error, marks the key as rate-limited, switches immediately to the next available healthy key, and transparently retries the turn without failing the session.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Installation
@@ -373,37 +479,64 @@ Create or edit `.env` in `Proto_Harness/`:
 
 ```env
 LLM_PROVIDER=gemini
-GEMINI_API_KEY="your-gemini-api-key"
+
+# Primary API Key
+GEMINI_API_KEY="your-primary-gemini-api-key"
+
+# Optional: Additional API keys for round-robin load balancing & 429 rate limit failover
+GEMINI_API_KEY1="your-secondary-gemini-api-key"
+GEMINI_API_KEY2="your-tertiary-gemini-api-key"
+
+# Optional: OpenRouter key if LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
 
 ### 3. CLI Usage & Flags
 
+#### Interactive REPL (`proto`)
 ```powershell
-# Default launch
+# Default launch (interactive REPL in current directory)
 proto
 
-# Start directly in plan mode (read-only safe mode)
-proto -M plan
-# or
-proto --mode plan
+# Start with a specific persona and permission mode
+proto -a code-reviewer -M plan
 
 # Start in bypass mode (all permissions auto-approved)
 proto -M bypass
 
-# Specify custom workspace directory
+# Target a different workspace directory
 proto -C "C:\path\to\your\project"
 
 # Override provider and model
 proto -p openrouter -m "anthropic/claude-3.5-sonnet"
 ```
 
+#### Headless Autonomous Execution (`proto run`)
+```powershell
+# Run a single task autonomously
+proto run "Check git status and summarize uncommitted changes"
+
+# Pipe clean output into a file (no progress/tool logs in stdout)
+proto run "Generate a comprehensive test plan for src/proto_harness/runtime/" > test_plan.md
+
+# Pipe clean output directly into other tools
+proto run "List all agent names in the builtin directory" | grep -i review
+
+# Run with a specific agent persona in read-only mode
+proto run "Audit the codebase for hardcoded credentials" -a code-reviewer -M plan
+
+# Run quietly (suppress stderr tool-call progress markers)
+proto run "Summarize README.md" -q
+```
+
 ---
 
 ## 💡 Key Design Takeaways
 
-1. **Decoupled Architecture**: The agent core (`loop.py`), harness (`runner.py`), permission gate (`gate.py`), and skills catalog (`catalog.py`) communicate strictly via domain contracts.
-2. **Progressive Disclosure**: Keeps token usage minimal while providing domain-specific workflows on demand.
-3. **Single Input Surface for Turn, HITL, & Skills**: Approval questions and slash commands ride the live input surface without opening secondary prompt sessions or causing deadlocks.
+1. **Decoupled Architecture**: The agent core (`loop.py`), harness (`runner.py`), permission gate (`gate.py`), runtime (`runner.py`), and skills catalog (`catalog.py`) communicate strictly via domain contracts.
+2. **Stream Separation for Automation**: Separation of `stdout` (pipe-clean model data) and `stderr` (real-time diagnostics) makes autonomous execution directly composable with standard Unix/PowerShell pipelines.
+3. **Resilient Provider Quotas**: Multi-key pooling with round-robin distribution and instant 429/503 retry failover keeps agents running smoothly through rate limits.
+4. **Progressive Disclosure**: Keeps token usage minimal while providing domain-specific workflows on demand.
+5. **Single Input Surface for Turn, HITL, & Skills**: Approval questions and slash commands ride the live input surface without opening secondary prompt sessions or causing deadlocks.
 
 

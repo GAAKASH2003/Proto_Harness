@@ -82,7 +82,8 @@ def _provider_config_error() -> str | None:
     return f"Proto: unknown LLM_PROVIDER {provider!r} (expected 'gemini' or 'openrouter')."
 
 
-@click.command(name="proto")
+@click.group(name="proto", invoke_without_command=True)
+@click.pass_context
 @click.option(
     "-C",
     "--cwd",
@@ -110,6 +111,7 @@ def _provider_config_error() -> str | None:
     help="Initial permission mode (default, plan, edit, bypass).",
 )
 def cli(
+    ctx: click.Context,
     cwd: Path | None,
     provider: str | None,
     model: str | None,
@@ -130,10 +132,73 @@ def cli(
         else:
             settings.gemini_model = model
 
+    # If no subcommand is specified, launch the interactive TUI REPL
+    if ctx.invoked_subcommand is None:
+        target_cwd = (cwd or Path.cwd()).resolve()
+        initial_mode = PermissionMode(mode.lower()) if mode else None
+        asyncio.run(run_app(cwd=target_cwd, mode=initial_mode))
+
+
+@cli.command(name="run")
+@click.argument("task")
+@click.option(
+    "-a",
+    "--agent",
+    "agent_name",
+    default="build",
+    help="Persona name to run the task (build, plan, code-reviewer). Default: build.",
+)
+@click.option(
+    "-M",
+    "--mode",
+    type=click.Choice([m.value for m in PermissionMode], case_sensitive=False),
+    default="bypass",
+    help="Permission mode for the run (default: bypass for unattended execution).",
+)
+@click.option(
+    "-C",
+    "--cwd",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Set working directory for the task.",
+)
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    help="Suppress progress and tool notifications on stderr.",
+)
+def run_command(
+    task: str,
+    agent_name: str,
+    mode: str,
+    cwd: Path | None,
+    quiet: bool,
+) -> None:
+    """Run a single TASK autonomously to completion and print the result to stdout."""
+    from proto_harness.runtime.runner import run_headless
+
     target_cwd = (cwd or Path.cwd()).resolve()
-    initial_mode = PermissionMode(mode.lower()) if mode else None
-    asyncio.run(run_app(cwd=target_cwd, mode=initial_mode))
+    target_mode = PermissionMode(mode.lower())
+
+    try:
+        result = asyncio.run(
+            run_headless(
+                task,
+                agent_name=agent_name,
+                mode=target_mode,
+                cwd=target_cwd,
+                quiet=quiet,
+            )
+        )
+        # Pipe-clean output to stdout
+        if result.output:
+            click.echo(result.output)
+    except Exception as exc:
+        click.echo(f"Proto Run Error: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
 
 
 if __name__ == "__main__":
     cli()
+
