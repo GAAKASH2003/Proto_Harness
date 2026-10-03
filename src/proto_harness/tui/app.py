@@ -39,6 +39,15 @@ from prompt_toolkit.formatted_text import HTML
 from proto_harness.context.compaction import CompactOutcome
 from proto_harness.tools.tasks import _checklist_lines
 from proto_harness.agents.loader import load_agent, load_agents
+from proto_harness.sandbox import (
+    SandboxInfo,
+    apply_sandbox,
+    cleanup_sandbox,
+    create_sandbox,
+    get_sandbox_diff,
+    handback_workspace,
+    is_git_repo,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -74,6 +83,7 @@ class SlashCompleter(Completer):
             "/agent": "switch active agent persona (/agent <name>)",
             "/agents": "list available agent personas",
             "/mode": "switch or view permission mode (/mode <name>)",
+            "/sandbox": "manage isolated git worktree (/sandbox [diff|apply|discard])",
             "/tasks": "inspect current task checklist (/tasks)",
             "/memory": "inspect current workspace memory (/memory)",
             "/compact": "compact conversation history (/compact)",
@@ -192,17 +202,28 @@ def _make_permission_resolver(
 async def run_app(
     cwd: Path | None = None,
     mode: str | PermissionMode | None = None,
+    sandbox: bool = False
 ) -> None:
     """The main REPL loop. Called by cli.py."""
     console = Console(force_terminal=True)
     emit = _make_event_sink(console)
+    active_sandbox: SandboxInfo | None = None
 
     active_cwd = (cwd or Path.cwd()).resolve()
     active_agent = load_agent("build", cwd=active_cwd)
     initial_mode = active_agent.mode
     if mode is not None:
         initial_mode = PermissionMode(mode.lower()) if isinstance(mode, str) else mode
-
+    
+    if sandbox:
+        if not is_git_repo(active_cwd):
+            console.print(f"[bold red]Cannot launch sandbox:[/bold red] '{active_cwd}' is not inside a git repository.")
+            return
+        active_sandbox = create_sandbox(active_cwd)
+        active_cwd = active_sandbox.sandbox_dir
+        console.print(f"[bold green]Proto Sandbox Active[/bold green] - Isolated branch: [cyan]{active_sandbox.branch_name}[/cyan]")
+        console.print(f"[dim]Worktree: {active_sandbox.sandbox_dir}[/dim]\n")
+    
     gate = PermissionGate(mode=initial_mode)
     decisions = DecisionChannel()
     resolve_permission = _make_permission_resolver(decisions, console, gate)
@@ -265,6 +286,17 @@ async def run_app(
             lower = text.lower()
 
             if lower in _QUIT_COMMANDS:
+                if active_sandbox:
+                    try:
+                        hb = handback_workspace(active_sandbox)
+                        cleanup_sandbox(active_sandbox, delete_branch=False)
+                        if hb.modified_files:
+                            console.print(
+                                f"\n[bold green]Proto[/bold green] - sandbox changes preserved on branch [cyan]'{active_sandbox.branch_name}'[/cyan]."
+                                f"\nTo inspect or merge: [dim]git diff {active_sandbox.branch_name}[/dim] or [dim]git merge {active_sandbox.branch_name}[/dim]"
+                            )
+                    except Exception as exc:
+                        logger.debug("Failed clean exit of sandbox: %s", exc)
                 break
 
             if lower in {"/pwd", "/cwd", "pwd"}:
@@ -288,7 +320,44 @@ async def run_app(
                     console.print("[red]Proto - compaction failed: summarizer call failed or returned empty.[/red]")
                 continue
             
-     
+            if lower.startswith("/sandbox") or lower.startswith("/sbx"):
+                if not active_sandbox:
+                    console.print("Proto - session is not running in sandbox mode (start with `proto --sandbox`).")
+                    continue
+                parts = text.split(" ", 1)
+                subcmd = parts[1].strip().lower() if len(parts) > 1 else ""
+                if not subcmd or subcmd == "status":
+                    handback = handback_workspace(active_sandbox)
+                    console.print(f"[bold cyan]Sandbox Status:[/bold cyan] {active_sandbox.status.value}")
+                    console.print(f"  • Branch: [green]{active_sandbox.branch_name}[/green]")
+                    console.print(f"  • Worktree: [dim]{active_sandbox.sandbox_dir}[/dim]")
+                    if handback.modified_files:
+                        console.print(f"  • Modified files ({len(handback.modified_files)}):")
+                        for f in handback.modified_files:
+                            console.print(f"      - {f}")
+                    else:
+                        console.print("  • No modified files.")
+                
+                elif subcmd == "diff":
+                    diff_text = get_sandbox_diff(active_sandbox)
+                    if not diff_text.strip():
+                        console.print("Proto - no changes in sandbox.")
+                    else:
+                        console.print("[bold cyan]--- Sandbox Diff ---[/bold cyan]")
+                        console.print(diff_text)
+                        console.print("[bold cyan]--------------------[/bold cyan]")
+                elif subcmd == "apply":
+                    res = apply_sandbox(active_sandbox)
+                    if res.success:
+                        console.print(f"[bold green]Proto - successfully merged sandbox changes into {active_sandbox.base_repo}[/bold green]")
+                    else:
+                        console.print(f"[bold red]Proto - failed to merge sandbox changes: {res.message}[/bold red]")
+                elif subcmd == "discard":
+                    cleanup_sandbox(active_sandbox, delete_branch=True)
+                    console.print(f"[yellow]Proto - discarded sandbox and deleted branch '{active_sandbox.branch_name}'[/yellow]")
+                    break
+                continue
+
 
             if lower in {"/tasks", "/todo", "tasks", "todo"}:
                 if not deps.task_store:

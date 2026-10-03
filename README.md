@@ -21,6 +21,7 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 - Real-time token streaming and structured event propagation
 - Concurrency and message queuing (steering & follow-up queues)
 - **Headless Runtime & Durable Execution** (`proto run "<task>"` with pipe-clean stdout, stderr tool streaming, and `.proto_harness/runs/` checkpoint journals)
+- **Workspace Sandboxing & Git Worktree Isolation** (`--sandbox` with physical worktree separation, auto-commit handbacks, atomic merges, and rollback safety)
 - **Multi-API-Key Load Balancing & Failover** (round-robin turn rotation and automatic retry failover across multiple Gemini keys)
 - **Human-in-the-loop (HITL) safety & permission gating** (`DEFAULT`, `PLAN`, `EDIT`, `BYPASS`)
 - **Agent Skills Standard & Progressive Disclosure** (packaged built-ins + repo-local skills)
@@ -67,6 +68,9 @@ Proto_Harness/
 │   │   └── loop.py             # Headless turn handler (Pydantic AI stream)
 │   ├── runtime/
 │   │   └── runner.py           # Headless execution driver & durable checkpoint journal (.proto_harness/runs/)
+│   ├── sandbox/
+│   │   ├── types.py            # SandboxStatus, SandboxInfo, HandbackResult, ApplyResult
+│   │   └── manager.py          # Git worktree lifecycle: create, diff, handback, apply, cleanup
 │   ├── harness/
 │   │   ├── decisions.py        # DecisionChannel for async mid-turn HITL approval
 │   │   ├── queue.py            # Interaction queues (steering & follow-up)
@@ -351,6 +355,7 @@ Switch personas mid-session anytime using `/agent <name>` — conversation histo
 | `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
 | `/tasks` or `/todo` | Inspect the current in-memory task checklist (`[ ]`, `[~]`, `[x]`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
+| `/sandbox [diff\|apply\|discard]` | Inspect active Git worktree, review diff, merge to main, or discard |
 | `/compact` | Manually run full LLM compaction on older conversation history |
 | `/memory` | Inspect the active assembled memory (`AGENTS.md` + `MEMORY.md`) injected into system prompt |
 | `/cd <path>` or `cd <path>` | Change active working directory directly in the REPL |
@@ -462,6 +467,52 @@ To prevent Google Gemini rate limit errors (`429 ResourceExhausted` or `503 Unav
 
 ---
 
+## 📦 Workspace Sandboxing & Git Worktree Isolation (`sandbox/`)
+
+To prevent the agent from making unreviewed, destructive, or accidental changes directly to your primary working directory or active Git branch, Proto Harness implements **native Git Worktree sandboxing**.
+
+### 1. Zero-Overhead Physical Isolation
+Unlike slow filesystem copies or heavy Docker daemon requirements, Git worktrees allow multiple independent working directories connected to the same repository:
+- Creating a worktree takes **< 100 milliseconds**.
+- Checks out a dedicated session branch (`proto/<sandbox_id>`) branched directly from your current `HEAD`.
+- Placed cleanly under `.proto_harness/sandboxes/<sandbox_id>/` (automatically excluded from base `git status` via `.git/info/exclude`).
+- All tool operations (`read`, `write`, `edit`, `bash`) execute inside the isolated worktree directory. **Your primary workspace and unstaged edits remain 100% untouched.**
+
+### 2. "Never-Lose-Results" Handback & Auto-Commit
+Modeled after the safety guarantees in the Decode harness:
+- When a task or REPL session finishes, `handback_workspace()` checks for uncommitted changes.
+- Any dirty or newly created files are automatically captured into a safe commit using author `proto <proto@localhost>`.
+- The session branch `proto/<sandbox_id>` is preserved so your work is never lost, even if an apply is not immediately performed.
+
+### 3. Interactive REPL Sandbox (`proto --sandbox`)
+Start the interactive assistant inside an isolated sandbox with `proto --sandbox`:
+```powershell
+proto --sandbox
+```
+Use dedicated `/sandbox` slash commands in the prompt:
+- `/sandbox` or `/sandbox status`: View sandbox status, branch name, worktree directory, and changed files.
+- `/sandbox diff`: Render a colorized unified diff of everything changed so far.
+- `/sandbox apply`: Atomically merge sandbox changes back into your main branch.
+- `/sandbox discard`: Clean up the worktree and delete the temporary branch.
+
+### 4. Headless Sandbox Execution (`proto run --sandbox`)
+Run single tasks with automated worktree isolation, diff inspection, and merge options:
+```powershell
+# Run task in sandbox (changes preserved on proto/sbx_... branch)
+proto run "Refactor logging module" --sandbox
+
+# Print the unified diff upon completion
+proto run "Add type hints to files.py" -s --diff
+
+# Automatically merge changes into main branch on success
+proto run "Update documentation" -s --apply
+
+# Discard sandbox and temporary branch upon finish (dry runs)
+proto run "Experiment with test suite" -s --discard
+```
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Installation
@@ -501,6 +552,9 @@ proto
 # Start with a specific persona and permission mode
 proto -a code-reviewer -M plan
 
+# Start in an isolated Git worktree (protects main branch)
+proto --sandbox
+
 # Start in bypass mode (all permissions auto-approved)
 proto -M bypass
 
@@ -515,6 +569,12 @@ proto -p openrouter -m "anthropic/claude-3.5-sonnet"
 ```powershell
 # Run a single task autonomously
 proto run "Check git status and summarize uncommitted changes"
+
+# Run inside an isolated Git worktree and apply diff on success
+proto run "Format python files with black" -s --apply
+
+# Run in sandbox and preview the generated diff
+proto run "Refactor helper functions" -s --diff
 
 # Pipe clean output into a file (no progress/tool logs in stdout)
 proto run "Generate a comprehensive test plan for src/proto_harness/runtime/" > test_plan.md

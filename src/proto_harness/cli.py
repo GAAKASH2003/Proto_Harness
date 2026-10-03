@@ -110,12 +110,19 @@ def _provider_config_error() -> str | None:
     default=None,
     help="Initial permission mode (default, plan, edit, bypass).",
 )
+@click.option(
+    "-s",
+    "--sandbox",
+    is_flag=True,
+    help="Launch interactive session inside an isolated Git worktree.",
+)
 def cli(
     ctx: click.Context,
     cwd: Path | None,
     provider: str | None,
     model: str | None,
     mode: str | None,
+    sandbox: bool,
 ) -> None:
     """Proto Harness: A lightweight terminal coding assistant."""
     error = _provider_config_error()
@@ -136,7 +143,7 @@ def cli(
     if ctx.invoked_subcommand is None:
         target_cwd = (cwd or Path.cwd()).resolve()
         initial_mode = PermissionMode(mode.lower()) if mode else None
-        asyncio.run(run_app(cwd=target_cwd, mode=initial_mode))
+        asyncio.run(run_app(cwd=target_cwd, mode=initial_mode,sandbox=sandbox))
 
 
 @cli.command(name="run")
@@ -168,12 +175,38 @@ def cli(
     is_flag=True,
     help="Suppress progress and tool notifications on stderr.",
 )
+@click.option(
+    "-s",
+    "--sandbox",
+    is_flag=True,
+    help="Execute task inside an isolated Git worktree.",
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    help="Automatically merge sandbox changes to base branch on success.",
+)
+@click.option(
+    "--diff",
+    "show_diff",
+    is_flag=True,
+    help="Print unified diff of sandbox modifications to stderr.",
+)
+@click.option(
+    "--discard",
+    is_flag=True,
+    help="Discard sandbox and temporary branch upon completion.",
+)
 def run_command(
     task: str,
     agent_name: str,
     mode: str,
     cwd: Path | None,
     quiet: bool,
+    sandbox: bool,
+    apply: bool,
+    show_diff: bool,
+    discard: bool,
 ) -> None:
     """Run a single TASK autonomously to completion and print the result to stdout."""
     from proto_harness.runtime.runner import run_headless
@@ -189,8 +222,16 @@ def run_command(
                 mode=target_mode,
                 cwd=target_cwd,
                 quiet=quiet,
+                sandbox=sandbox,
+                apply=apply,
+                discard=discard,
             )
         )
+        if show_diff and result.diff:
+            click.echo("\n--- Sandbox Diff ---", err=True)
+            click.echo(result.diff, err=True)
+            click.echo("--------------------\n", err=True)
+
         # Pipe-clean output to stdout
         if result.output:
             click.echo(result.output)
