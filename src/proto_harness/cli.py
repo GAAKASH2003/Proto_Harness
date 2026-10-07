@@ -139,6 +139,10 @@ def cli(
         else:
             settings.gemini_model = model
 
+    # Initialize Opik tracing if OPIK_API_KEY is present
+    from proto_harness.observability import init_tracing
+    init_tracing()
+
     # If no subcommand is specified, launch the interactive TUI REPL
     if ctx.invoked_subcommand is None:
         target_cwd = (cwd or Path.cwd()).resolve()

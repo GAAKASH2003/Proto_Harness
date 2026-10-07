@@ -13,10 +13,18 @@ logger = logging.getLogger(__name__)
 def _find_env_files() -> tuple[str, ...]:
     candidates = [
         Path.cwd() / ".env",
-        Path(__file__).resolve().parents[1] / ".env",       # src/proto_harness/.env
-        Path(__file__).resolve().parents[2] / ".env",       # Proto_Harness/.env
+        Path(__file__).resolve().parents[1] / ".env",  # src/proto_harness/.env
+        Path(__file__).resolve().parents[2] / ".env",  # src/.env
+        Path(__file__).resolve().parents[3] / ".env",  # Proto_Harness/.env
     ]
-    existing = [str(p) for p in candidates if p.is_file()]
+    seen = set()
+    existing = []
+    for p in candidates:
+        if p.is_file():
+            resolved = str(p.resolve())
+            if resolved not in seen:
+                seen.add(resolved)
+                existing.append(resolved)
     return tuple(existing) if existing else (".env",)
 
 
@@ -54,6 +62,15 @@ class Settings(BaseSettings):
     # Tool execution
     bash_timeout_s: float = 120.0
     skills_dir: Path = Path(".proto_harness/skills")
+
+    # Observability & Opik tracing
+    opik_api_key: SecretStr = SecretStr("")
+    opik_project_name: str = "proto-harness"
+    opik_workspace: str = "default"
+    opik_url_override: str | None = None
+    llm_cost_input_usd_per_mtok: float | None = None
+    llm_cost_output_usd_per_mtok: float | None = None
+
     @property
     def active_model(self) -> str:
         if self.llm_provider == "openrouter":

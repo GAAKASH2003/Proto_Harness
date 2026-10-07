@@ -81,6 +81,12 @@ Proto_Harness/
 │   │   ├── files.py            # read, write, edit, cd, pwd tools
 │   │   ├── skills.py           # On-demand skill loader tool
 │   │   └── registry.py         # Tool registration onto the Agent
+│   ├── observability/
+│   │   ├── types.py            # ModelPricing and UsageMetrics schemas
+│   │   ├── models.py           # Provider pricing catalog (Gemini, Claude, Llama) & slug normalization
+│   │   ├── cost.py             # compute_batch_cost and format_cost_usd engine
+│   │   ├── tracker.py          # UsageTracker multi-turn session accumulator & Rich summary panel
+│   │   └── tracing.py          # Opik OpenTelemetry tracing via logfire & CostAnnotatingExporter
 │   └── tui/
 │       ├── render.py           # Event-to-Rich renderers with append-style styling
 │       └── app.py              # Async interactive REPL with patch_stdout and SlashCompleter
@@ -513,6 +519,35 @@ proto run "Experiment with test suite" -s --discard
 
 ---
 
+## 📊 Token Accounting, Cost Telemetry & Opik Tracing (`observability/`)
+
+Proto Harness features a zero-dependency local pricing engine and cloud observability pipeline following the Decode Harness (ADR-0014) standard.
+
+### 1. Local Pricing Engine (`cost.py`, `models.py`)
+- Tracks exact input and output tokens across turns and computes estimated USD cost.
+- Built-in pricing catalog covering Gemini (`gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-3.5-flash`), Anthropic Claude (`claude-3.5-sonnet`, `claude-3.5-haiku`), and Meta Llama (`llama-3.3-70b-instruct`).
+- Normalizes model slugs automatically (e.g. `google:gemini-2.0-flash` → `gemini-2.0-flash`).
+- Formats costs dynamically: sub-penny fractions (`$0.00032`), microscopic expenditures (`< $0.00001`), and zero-cost calls (`$0.00`).
+
+### 2. Headless Telemetry (`proto run`)
+- Every autonomous headless run displays runtime metrics on `stderr` while keeping `stdout` pure:
+  ```text
+  [done] 1.84s | 1,420 tokens (342.1 tok/s) | est. $0.00032 USD | 2 tools executed
+  ```
+- Persisted in `.proto_harness/runs/<run_id>.json` journals (`cost_usd`, `tokens_per_second`, `input_tokens`, `output_tokens`).
+
+### 3. Interactive REPL Telemetry (`proto`)
+- **`/stats` Command**: Inspect cumulative session token usage, token velocity, and estimated total USD cost at any time.
+- **Session Complete Recap**: Displays a formatted Rich summary panel on exit with a breakdown of turns, tokens, generation speed, and total cost.
+
+### 4. Opik OpenTelemetry Integration (`tracing.py`)
+- **Presence-Based**: Completely zero-overhead and silent when `OPIK_API_KEY` is not provided.
+- **Logfire & OTLP Pipeline**: When configured, exports spans to Opik (cloud at `https://www.comet.com/opik/api/v1/private/otel` or self-hosted via `OPIK_URL_OVERRIDE`).
+- **`CostAnnotatingExporter`**: Automatically intercepts leaf LLM model spans (`gen_ai.request.model`), calculates token cost via the pricing catalog, and stamps `gen_ai.usage.cost` attributes onto spans prior to OTLP HTTP export.
+- **TUI & CLI Preservation**: Runs with `console=False` and `send_to_logfire=False` to preserve prompt-pinned interactive rendering and clean Unix pipelines.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Installation
@@ -540,6 +575,11 @@ GEMINI_API_KEY2="your-tertiary-gemini-api-key"
 
 # Optional: OpenRouter key if LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY="your-openrouter-api-key"
+
+# Optional: Opik Tracing (presence-based OpenTelemetry export)
+OPIK_API_KEY="your-opik-api-key"
+OPIK_PROJECT_NAME="proto-harness"
+OPIK_WORKSPACE="default"
 ```
 
 ### 3. CLI Usage & Flags

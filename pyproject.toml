@@ -18,6 +18,7 @@ dependencies = [
     "pydantic-ai-slim[google,openai]",
     "httpx",
     "pyyaml",
+    "logfire",
 ]
 
 [project.scripts]

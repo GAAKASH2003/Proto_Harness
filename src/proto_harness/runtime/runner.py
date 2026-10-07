@@ -34,6 +34,14 @@ from proto_harness.sandbox import (
     handback_workspace,
     is_git_repo,
 )
+from proto_harness.config.settings import settings
+from proto_harness.observability import (
+    compute_batch_cost,
+    flush_tracing,
+    format_cost_usd,
+    record_output,
+    root_span,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +66,8 @@ class HeadlessRunResult:
     sandbox_branch: str | None = None
     sandbox_applied: bool = False
     diff: str = ""
+    cost_usd: float = 0.0
+    tokens_per_second: float = 0.0
 
 
 def _generate_run_id() -> str:
@@ -81,14 +91,16 @@ def _extract_final_text(messages: list[ModelMessage]) -> str:
     return ""
 
 
-def _calculate_tokens(messages: list[ModelMessage]) -> int:
+def _calculate_tokens(messages: list[ModelMessage]) -> tuple[int, int]:
     """Sum input and output tokens across all responses."""
-    total = 0
+    inp = 0
+    out = 0
     for message in messages:
         if isinstance(message, ModelResponse):
-            total += getattr(message.usage, "input_tokens", 0) or 0
-            total += getattr(message.usage, "output_tokens", 0) or 0
-    return total
+            inp += getattr(message.usage, "input_tokens", 0) or 0
+            out += getattr(message.usage, "output_tokens", 0) or 0
+    return inp, out
+
 
 
 def _count_tool_calls(messages: list[ModelMessage]) -> int:
@@ -236,15 +248,25 @@ async def run_headless(
             sys.stderr.write(
                 f"Proto Headless [run_id={run_id}] agent={agent_name} mode={mode.value} cwd={effective_cwd}\n"
             )
-            sys.stderr.flush()
-
-        await handler.run_turn(task)
+        with root_span("headless_run", thread_id=run_id, input=task) as span:
+            await handler.run_turn(task)
+            final_output = _extract_final_text(handler.message_history)
+            if span is not None:
+                record_output(span, final_output)
 
         duration_s = round(time.monotonic() - start_time, 2)
         end_time_iso = datetime.now(timezone.utc).isoformat()
-        final_output = _extract_final_text(handler.message_history)
-        total_tokens = _calculate_tokens(handler.message_history)
+        input_tokens, output_tokens = _calculate_tokens(handler.message_history)
+        total_tokens = input_tokens + output_tokens
+        active_model = settings.active_model
         tool_calls_count = _count_tool_calls(handler.message_history)
+        usage_metrics = compute_batch_cost(
+            model_name=active_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+        tokens_per_sec = round(output_tokens / duration_s, 1) if duration_s > 0 else 0.0
+
 
         diff_str = ""
         applied_ok = False
@@ -283,8 +305,12 @@ async def run_headless(
             "started_at": started_at,
             "ended_at": end_time_iso,
             "duration_s": duration_s,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "total_tokens": total_tokens,
             "tool_calls_count": tool_calls_count,
+            "cost_usd": usage_metrics.cost_usd,
+            "tokens_per_second": tokens_per_sec,
             "output": final_output,
             "events": recorded_events,
             "sandbox_id": sbx.sandbox_id if sbx else None,
@@ -295,8 +321,9 @@ async def run_headless(
         journal_path = _save_run_journal(journal_dir, run_id, journal_payload)
 
         if not quiet:
+            cost_str = format_cost_usd(usage_metrics.cost_usd)
             sys.stderr.write(
-                f"\n[done] {duration_s}s | {total_tokens} tokens | {tool_calls_count} tools executed\n"
+                f"\n[done] {duration_s}s | {total_tokens:,} tokens ({tokens_per_sec} tok/s) | est. {cost_str} USD | {tool_calls_count} tools executed\n"
             )
             sys.stderr.flush()
 
@@ -317,6 +344,8 @@ async def run_headless(
             sandbox_branch=sbx.branch_name if sbx else None,
             sandbox_applied=applied_ok,
             diff=diff_str,
+            cost_usd=usage_metrics.cost_usd,
+            tokens_per_second=tokens_per_sec,
         )
 
     except Exception:
@@ -328,3 +357,5 @@ async def run_headless(
             except Exception as clean_exc:
                 logger.debug("Failed emergency sandbox cleanup: %s", clean_exc)
         raise
+    finally:
+        flush_tracing()

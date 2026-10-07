@@ -10,11 +10,14 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+import time
+import uuid
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.patch_stdout import patch_stdout
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from rich.console import Console
 from rich.style import Style
 from rich.text import Text
@@ -47,6 +50,12 @@ from proto_harness.sandbox import (
     get_sandbox_diff,
     handback_workspace,
     is_git_repo,
+)
+from proto_harness.observability import (
+    UsageTracker,
+    flush_tracing,
+    record_output,
+    root_span,
 )
 
 
@@ -87,6 +96,7 @@ class SlashCompleter(Completer):
             "/tasks": "inspect current task checklist (/tasks)",
             "/memory": "inspect current workspace memory (/memory)",
             "/compact": "compact conversation history (/compact)",
+            "/stats": "view session token usage, generation speed, and estimated USD cost",
             "/cd": "change working directory (/cd <path>)",
             "/pwd": "print current working directory",
             "/clear": "clear the terminal screen",
@@ -198,6 +208,30 @@ def _make_permission_resolver(
 
     return resolver
 
+def _extract_usage(messages: list[ModelMessage]) -> tuple[int, int]:
+    """Sum input and output tokens across all responses."""
+    inp = 0
+    out = 0
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            inp += getattr(message.usage, "input_tokens", 0) or 0
+            out += getattr(message.usage, "output_tokens", 0) or 0
+    return inp, out
+
+
+def _extract_final_text(messages: list[ModelMessage]) -> str:
+    """Extract the final assistant response text from message history."""
+    for message in reversed(messages):
+        if isinstance(message, ModelResponse):
+            parts = [
+                part.content
+                for part in message.parts
+                if isinstance(part, TextPart) and part.content
+            ]
+            if parts:
+                return "\n".join(parts).strip()
+    return ""
+
 
 async def run_app(
     cwd: Path | None = None,
@@ -205,9 +239,11 @@ async def run_app(
     sandbox: bool = False
 ) -> None:
     """The main REPL loop. Called by cli.py."""
+    session_id = f"repl_{uuid.uuid4().hex[:8]}"
     console = Console(force_terminal=True)
     emit = _make_event_sink(console)
     active_sandbox: SandboxInfo | None = None
+    tracker = UsageTracker(active_model=settings.active_model)
 
     active_cwd = (cwd or Path.cwd()).resolve()
     active_agent = load_agent("build", cwd=active_cwd)
@@ -243,7 +279,25 @@ async def run_app(
     )
     handler = AgentTurnHandler(agent=agent, deps=deps)
 
-    runner = Runner(on_event=emit)
+    prev_inp = 0
+    prev_out = 0
+
+    def on_turn_complete(prompt: str, duration_s: float) -> None:
+        nonlocal prev_inp, prev_out
+        curr_inp, curr_out = _extract_usage(handler.message_history)
+        tracker.record_turn(
+            model_name=settings.active_model,
+            input_tokens=max(curr_inp - prev_inp, 0),
+            output_tokens=max(curr_out - prev_out, 0),
+            duration_s=round(duration_s, 2),
+        )
+        prev_inp, prev_out = curr_inp, curr_out
+
+    runner = Runner(
+        on_event=emit,
+        on_turn_complete=on_turn_complete,
+        session_id=session_id,
+    )
     runner.set_handler(handler)
 
     session: PromptSession[str] = PromptSession(completer=SlashCompleter(lambda: deps.cwd))
@@ -286,8 +340,12 @@ async def run_app(
             lower = text.lower()
 
             if lower in _QUIT_COMMANDS:
+                if tracker.turns_count > 0:
+                    console.print("\n[bold]Session Complete[/bold]")
+                    console.print(tracker.render_summary_panel())
                 if active_sandbox:
                     try:
+
                         hb = handback_workspace(active_sandbox)
                         cleanup_sandbox(active_sandbox, delete_branch=False)
                         if hb.modified_files:
@@ -319,6 +377,11 @@ async def run_app(
                 elif outcome == CompactOutcome.SUMMARIZER_FAILED:
                     console.print("[red]Proto - compaction failed: summarizer call failed or returned empty.[/red]")
                 continue
+
+            if lower in {"/stats", "stats"}:
+                console.print(tracker.render_summary_panel())
+                continue
+
             
             if lower.startswith("/sandbox") or lower.startswith("/sbx"):
                 if not active_sandbox:
@@ -450,6 +513,8 @@ async def run_app(
                 if found is not None:
                     payload = format_skill_payload(found, cwd=deps.cwd)
                     turn_input = f"{payload}\n\n{trailing}" if trailing else payload
+                    if runner.is_busy:
+                        console.print("[dim cyan]Proto - turn in progress; queued message as follow-up.[/dim cyan]")
                     await runner.submit(turn_input)
                     continue
                 else:
@@ -459,11 +524,16 @@ async def run_app(
 
             if runner.is_busy:
                 console.print("[dim cyan]Proto - turn in progress; queued message as follow-up.[/dim cyan]")
+
             await runner.submit(text)
 
     # Wait for the active turn to finish before exit
-    while runner.is_busy:
-        await asyncio.sleep(0.05)
+    try:
+        while runner.is_busy:
+            await asyncio.sleep(0.05)
 
-    # On-exit memory write-back (non-fatal) to the active working directory
-    await extract_on_exit(handler.message_history, deps.cwd)
+        # On-exit memory write-back (non-fatal) to the active working directory
+        await extract_on_exit(handler.message_history, deps.cwd)
+    finally:
+        flush_tracing()
+
