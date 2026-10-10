@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "proto_harness_repo": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://gitmcp.io/GAAKASH2003/Proto_Harness"
+      ],
+      "read_only_tools": ["*"],
+      "enabled": true
+    },
+    "alphavantage": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.alphavantage.co/mcp?apikey=${ALPHAVANTAGE_API_KEY}"
+      ],
+      "read_only_tools": ["*"],
+      "enabled": true
+    }
+  }
+}

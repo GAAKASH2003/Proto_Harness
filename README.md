@@ -20,6 +20,7 @@ Most AI agents only require ~20 lines of LLM integration code. Everything that m
 - The turn lifecycle and state management
 - Real-time token streaming and structured event propagation
 - Concurrency and message queuing (steering & follow-up queues)
+- **Model Context Protocol (MCP) Integration** (stdio JSON-RPC client, multi-server lifecycle, `.mcp.json` auto-discovery, 16MB stream buffering, permission gating, and `/mcp` inspector)
 - **Headless Runtime & Durable Execution** (`proto run "<task>"` with pipe-clean stdout, stderr tool streaming, and `.proto_harness/runs/` checkpoint journals)
 - **Workspace Sandboxing & Git Worktree Isolation** (`--sandbox` with physical worktree separation, auto-commit handbacks, atomic merges, and rollback safety)
 - **Multi-API-Key Load Balancing & Failover** (round-robin turn rotation and automatic retry failover across multiple Gemini keys)
@@ -42,6 +43,9 @@ Proto_Harness/
 │   ├── logging.py              # File-based logging to .proto_harness/logs/
 │   ├── config/
 │   │   └── settings.py         # Pydantic BaseSettings (Gemini, OpenRouter, skills_dir, memory, compaction)
+│   ├── mcp/
+│   │   ├── config.py           # MCPServerConfig & MCPConfig schema, env var expansion, and auto-discovery
+│   │   └── manager.py          # Stdio JSON-RPC 2.0 async client & multi-server connection manager
 │   ├── context/
 │   │   └── compaction.py       # Two-tier compaction cascade, boundary snapping, and token estimation
 │   ├── entities/
@@ -63,8 +67,8 @@ Proto_Harness/
 │   │       ├── commit/SKILL.md
 │   │       └── code-review/SKILL.md
 │   ├── agent/
-│   │   ├── deps.py             # Agent dependencies (cwd, emit, gate, resolve_permission)
-│   │   ├── factory.py          # Model selection, agent factory, and dynamic memory/catalog hook
+│   │   ├── deps.py             # Agent dependencies (cwd, emit, gate, resolve_permission, mcp_manager)
+│   │   ├── factory.py          # Model selection, agent factory, MCP tool wrapper, and dynamic hooks
 │   │   └── loop.py             # Headless turn handler (Pydantic AI stream)
 │   ├── runtime/
 │   │   └── runner.py           # Headless execution driver & durable checkpoint journal (.proto_harness/runs/)
@@ -89,7 +93,7 @@ Proto_Harness/
 │   │   └── tracing.py          # Opik OpenTelemetry tracing via logfire & CostAnnotatingExporter
 │   └── tui/
 │       ├── render.py           # Event-to-Rich renderers with append-style styling
-│       └── app.py              # Async interactive REPL with patch_stdout and SlashCompleter
+│       └── app.py              # Async interactive REPL with patch_stdout, SlashCompleter, and /mcp command
 ```
 
 ---
@@ -326,6 +330,8 @@ The agent has access to a structured toolset designed specifically for coding ta
 | `todo_write(tasks)` | `READ_ONLY` | Manage structured task checklist | Replace semantics; emits `TaskListUpdated` event with `[ ]`, `[~]`, `[x]` |
 | `enter_plan_mode()` | `READ_ONLY` | Enter read-only planning mode | Programmatically switches session to `PLAN` mode |
 | `exit_plan_mode(plan)` | `READ_ONLY` | Present plan and request approval | Asks human `[y/N]` via DecisionChannel; switches to `EDIT` on approval |
+| `<server>__<tool>(...)` | `READ_ONLY` or `OTHER` | External MCP server tools | Auto-discovered from `.mcp.json`; namespaced with `<server>__`; full JSON Schema parameter validation; auto-allowed via `read_only_tools: ["*"]` or guarded via HITL |
+
 
 ---
 
@@ -359,6 +365,8 @@ Switch personas mid-session anytime using `/agent <name>` — conversation histo
 | `/agent [name]` | View active persona or switch to another (e.g. `/agent plan`, `/agent build`) |
 | `/agents` | List all available agent personas, their modes, descriptions, and allowed tools |
 | `/<skill-name> [prompt]` | Run a skill directly (e.g. `/commit`, `/code-review`) |
+| `/mcp` | Inspect active MCP servers, connection status, transport, and registered tools |
+| `/mcp refresh` | Re-poll MCP servers and dynamically reload tools into active agent |
 | `/tasks` or `/todo` | Inspect the current in-memory task checklist (`[ ]`, `[~]`, `[x]`) |
 | `/mode [name]` | Check the current mode, or switch to `default`, `plan`, `edit`, or `bypass` |
 | `/sandbox [diff\|apply\|discard]` | Inspect active Git worktree, review diff, merge to main, or discard |
@@ -519,6 +527,71 @@ proto run "Experiment with test suite" -s --discard
 
 ---
 
+## 🔌 Model Context Protocol (MCP) Integration (`mcp/`)
+
+Proto Harness natively implements the **Model Context Protocol (MCP)** specification (following the Decode Harness reference standard), allowing your agent to securely connect to external APIs, live market feeds, documentation hubs, and custom tools.
+
+```mermaid
+flowchart LR
+    A["Workspace / Config<br/><code>.mcp.json</code>"] --> B["<b>MCPManager</b><br/>Multi-Server Lifecycle"]
+    B --> C["<b>MCPClient</b><br/>Async Stdio JSON-RPC 2.0<br/>(16MB Stream Buffer)"]
+    C <--> D["External MCP Servers<br/>(AlphaVantage, GitMCP, SQLite, etc.)"]
+    B --> E["<b>Tool Registry & Factory</b><br/>Namespaced: <code>&lt;server&gt;__&lt;tool&gt;</code><br/>JSON Schema Injected"]
+    E --> F["<b>PermissionGate</b><br/>Wildcard <code>read_only_tools: ['*']</code><br/>Mutating tools HITL guarded"]
+    F --> G["<b>Agent Loop & TUI</b><br/>LLM Calls & <code>/mcp</code> Command"]
+```
+
+### 1. Configuration & Priority Discovery (`.mcp.json`)
+
+Proto Harness automatically discovers MCP configurations on launch by checking the following locations in order:
+1. `<workspace>/.proto_harness/mcp.json`
+2. `<workspace>/mcp_config.json`
+3. `<workspace>/.mcp.json` *(Standard)*
+4. `<workspace>/src/proto_harness/.mcp.json`
+5. Parent directories up to workspace/git root
+6. `~/.proto_harness/mcp.json` *(Global default)*
+
+### 2. Automatic Environment Variable Resolution
+
+Never check API keys into version control! You can reference environment variables using `${VAR}` or `$VAR`. Proto Harness automatically resolves these values directly from your `.env` files and `os.environ`:
+
+```json
+{
+  "mcpServers": {
+    "alphavantage": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.alphavantage.co/mcp?apikey=${ALPHAVANTAGE_API_KEY}"
+      ],
+      "read_only_tools": ["*"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### 3. Resilient Stdio JSON-RPC 2.0 Client (`mcp/manager.py`)
+
+- **Subprocess Execution**: Spawns servers over stdio with automatic Windows wrapper resolution (`npx` $\to$ `npx.cmd`, `uvx` $\to$ `uvx.exe`, `python`).
+- **High-Throughput 16MB Stream Buffer**: Many production MCP servers (such as financial APIs with 100+ tools) emit large multi-kilobyte schemas on a single line. Proto Harness configures a 16MB stream buffer (`limit=16 * 1024 * 1024`) in `asyncio.create_subprocess_exec` to ingest extensive toolsets without buffer overflow errors.
+- **Clean Process Lifecycle**: Subprocesses are tracked, health-checked, and gracefully terminated (`SIGTERM` $\to$ `SIGKILL`) on exit, preventing orphaned background tasks and closed-pipe resource warnings on Windows.
+
+### 4. Interactive Inspection & Slash Commands
+
+- **Startup Summary**: Automatically reports connected servers and total available tools on launch:
+  ```text
+  Proto - MCP: connected 2 server(s) (137 tools available via /mcp)
+  ```
+- **`/mcp` Command**: Inspect active servers, connection status (`connected` / `offline`), transport protocols, and the full catalog of registered tools.
+- **`/mcp refresh` Subcommand**: Re-queries servers and dynamically hot-reloads tools into the active agent without restarting your session.
+- **Headless Execution (`proto run`)**: Unattended runs automatically boot, query, and close all configured MCP servers.
+
+```
+
+---
+
 ## 📊 Token Accounting, Cost Telemetry & Opik Tracing (`observability/`)
 
 Proto Harness features a zero-dependency local pricing engine and cloud observability pipeline following the Decode Harness (ADR-0014) standard.
@@ -576,6 +649,9 @@ GEMINI_API_KEY2="your-tertiary-gemini-api-key"
 # Optional: OpenRouter key if LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY="your-openrouter-api-key"
 
+# Optional: External MCP server keys (referenced in .mcp.json via ${VAR})
+ALPHAVANTAGE_API_KEY="your-alpha-vantage-key"
+
 # Optional: Opik Tracing (presence-based OpenTelemetry export)
 OPIK_API_KEY="your-opik-api-key"
 OPIK_PROJECT_NAME="proto-harness"
@@ -603,12 +679,19 @@ proto -C "C:\path\to\your\project"
 
 # Override provider and model
 proto -p openrouter -m "anthropic/claude-3.5-sonnet"
+
+# Interact with MCP tools in the REPL
+○ 0% > /mcp
+○ 0% > Use Alpha Vantage MCP to get NVDA daily price data for the past month, calculate RSI, and summarize the trend.
 ```
 
 #### Headless Autonomous Execution (`proto run`)
 ```powershell
 # Run a single task autonomously
 proto run "Check git status and summarize uncommitted changes"
+
+# Run tasks leveraging configured MCP tools (e.g. GitHub/GitMCP repo analysis)
+proto run "Use GitMCP to list recent pull requests and summarize open issues"
 
 # Run inside an isolated Git worktree and apply diff on success
 proto run "Format python files with black" -s --apply
@@ -638,5 +721,7 @@ proto run "Summarize README.md" -q
 3. **Resilient Provider Quotas**: Multi-key pooling with round-robin distribution and instant 429/503 retry failover keeps agents running smoothly through rate limits.
 4. **Progressive Disclosure**: Keeps token usage minimal while providing domain-specific workflows on demand.
 5. **Single Input Surface for Turn, HITL, & Skills**: Approval questions and slash commands ride the live input surface without opening secondary prompt sessions or causing deadlocks.
+6. **Extensible Model Context Protocol (MCP)**: Production-grade stdio JSON-RPC 2.0 client with 16MB stream buffering, automatic env var resolution (`${VAR}`), `<server>__<tool>` namespacing, and wildcard auto-approval permissions (`read_only_tools: ["*"]`).
+
 
 

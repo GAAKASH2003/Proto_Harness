@@ -27,6 +27,7 @@ from proto_harness.entities import events
 from proto_harness.entities.permissions import PermissionDecision, PermissionRequest
 from proto_harness.permissions.gate import PermissionGate
 from proto_harness.permissions.types import PermissionMode
+from proto_harness.mcp.manager import MCPManager
 from proto_harness.sandbox import (
     apply_sandbox,
     cleanup_sandbox,
@@ -157,6 +158,7 @@ async def run_headless(
 
     sbx = None
     effective_cwd = target_cwd
+    mcp_mgr: MCPManager | None = None
 
     if sandbox:
         if not is_git_repo(target_cwd):
@@ -172,8 +174,11 @@ async def run_headless(
             sys.stderr.flush()
 
     try:
+        mcp_mgr = MCPManager(cwd=effective_cwd)
+        await mcp_mgr.start_all()
+
         agent_def = load_agent(agent_name, cwd=effective_cwd)
-        agent = build_agent(agent_def=agent_def, model=model)
+        agent = build_agent(agent_def=agent_def, model=model, mcp_manager=mcp_mgr)
         gate = PermissionGate(mode=mode)
 
         recorded_events: list[dict] = []
@@ -240,6 +245,7 @@ async def run_headless(
             gate=gate,
             resolve_permission=headless_permission_resolver,
             resolve_user_question=None,
+            mcp_manager=mcp_mgr,
         )
 
         handler = AgentTurnHandler(agent=agent, deps=deps)
@@ -358,4 +364,9 @@ async def run_headless(
                 logger.debug("Failed emergency sandbox cleanup: %s", clean_exc)
         raise
     finally:
+        if mcp_mgr:
+            try:
+                await mcp_mgr.close_all()
+            except Exception as close_exc:
+                logger.debug("Failed closing MCP servers in headless runner: %s", close_exc)
         flush_tracing()

@@ -9,6 +9,7 @@ from proto_harness.entities.permissions import PermissionDecision,PermissionRequ
 from proto_harness.permissions.gate import PermissionGate
 from proto_harness.entities.task import Task
 from proto_harness.entities.agent_def import AgentDef
+from proto_harness.mcp.manager import MCPManager
 
 
 PermissionResolver = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
@@ -24,3 +25,4 @@ class AgentDeps:
     resolve_user_question: UserQuestionResolver | None = None
     task_store: list[Task]=field(default_factory=list)
     active_agent: AgentDef | None = None
+    mcp_manager: MCPManager | None = None

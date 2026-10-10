@@ -57,6 +57,7 @@ from proto_harness.observability import (
     record_output,
     root_span,
 )
+from proto_harness.mcp.manager import MCPManager
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ class SlashCompleter(Completer):
             "/agent": "switch active agent persona (/agent <name>)",
             "/agents": "list available agent personas",
             "/mode": "switch or view permission mode (/mode <name>)",
+            "/mcp": "inspect active MCP servers and registered tools (/mcp [refresh])",
             "/sandbox": "manage isolated git worktree (/sandbox [diff|apply|discard])",
             "/tasks": "inspect current task checklist (/tasks)",
             "/memory": "inspect current workspace memory (/memory)",
@@ -268,14 +270,21 @@ async def run_app(
         console.print(Text(question, style="bold yellow"))
         return await decisions.request()
 
-    agent = build_agent(agent_def=active_agent)
+    mcp_manager = MCPManager(cwd=active_cwd)
+    await mcp_manager.start_all()
+    if mcp_manager.servers_count > 0:
+        active_tools_count = len(mcp_manager.get_all_tools())
+        console.print(f"[dim]Proto - MCP: connected {mcp_manager.servers_count} server(s) ({active_tools_count} tools available via /mcp)[/dim]")
+
+    agent = build_agent(agent_def=active_agent, mcp_manager=mcp_manager)
     deps = AgentDeps(
         cwd=active_cwd,
         emit=emit,
         gate=gate,
         resolve_permission=resolve_permission,
         resolve_user_question=resolve_user_question,
-        active_agent=active_agent
+        active_agent=active_agent,
+        mcp_manager=mcp_manager,
     )
     handler = AgentTurnHandler(agent=agent, deps=deps)
 
@@ -486,6 +495,34 @@ async def run_app(
                     console.print(f"  • [bold]{name}[/bold]{active_marker} (mode: {a.mode.value})\n    {a.description}\n    [dim]tools: {tools_list}[/dim]")
                 continue
 
+            if lower.startswith("/mcp") or lower.startswith("mcp"):
+                parts = text.split()
+                subcmd = parts[1].lower() if len(parts) > 1 else ""
+                if not deps.mcp_manager or deps.mcp_manager.servers_count == 0:
+                    console.print("[dim]Proto - No MCP servers configured or active (see .mcp.json or proto.mcp.json).[/dim]")
+                    continue
+
+                if subcmd == "refresh":
+                    for client in deps.mcp_manager._clients.values():
+                        if client.is_running:
+                            await client.refresh_tools()
+                    new_agent = build_agent(agent_def=deps.active_agent, mcp_manager=deps.mcp_manager)
+                    handler.agent = new_agent
+                    console.print(f"[green]Proto - refreshed tools across {deps.mcp_manager.servers_count} MCP server(s).[/green]")
+                    continue
+
+                console.print(f"[bold cyan]Model Context Protocol (MCP) Servers ({deps.mcp_manager.servers_count} configured):[/bold cyan]")
+                for name, client in sorted(deps.mcp_manager._clients.items()):
+                    status = "[bold green]connected[/bold green]" if client.is_running else "[bold red]offline[/bold red]"
+                    console.print(f"  • [bold]{name}[/bold] ({client.config.transport}) - {status}")
+                    if client.tools:
+                        for t in client.tools:
+                            ro_tag = " [dim cyan](read-only)[/dim cyan]" if t.is_read_only else ""
+                            console.print(f"      → [green]{t.namespaced_name}[/green]{ro_tag}: {t.description}")
+                    else:
+                        console.print("      [dim](no tools registered)[/dim]")
+                continue
+
             if lower.startswith("/agent ") or lower.startswith("agent ") or lower in {"/agent", "agent"}:
                 parts = text.split(" ", 1)
                 target_name = parts[1].strip().lower() if len(parts) > 1 else ""
@@ -495,7 +532,7 @@ async def run_app(
                     continue
                 try:
                     new_agent_def = load_agent(target_name, deps.cwd)
-                    new_agent = build_agent(agent_def=new_agent_def)
+                    new_agent = build_agent(agent_def=new_agent_def, mcp_manager=deps.mcp_manager)
                     handler.agent = new_agent
                     deps.active_agent = new_agent_def
                     gate.set_mode(new_agent_def.mode)
@@ -535,5 +572,10 @@ async def run_app(
         # On-exit memory write-back (non-fatal) to the active working directory
         await extract_on_exit(handler.message_history, deps.cwd)
     finally:
+        if deps.mcp_manager:
+            try:
+                await deps.mcp_manager.close_all()
+            except Exception as close_exc:
+                logger.debug("Failed closing MCP servers on exit: %s", close_exc)
         flush_tracing()
 
